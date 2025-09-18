@@ -1,1 +1,1 @@
-# EaselyBot
+# EaselyPrivacyPolicy
