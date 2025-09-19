@@ -146,7 +146,7 @@ CREATE INDEX IF NOT EXISTS idx_message_logs_timestamp ON message_logs(timestamp)
 -- Update the database client functions to use proper PostgreSQL functions
 -- This addresses the 'now()' string literal issue
 
-COMMENT ON DATABASE current_database() IS 'Database schema updated for EaselyBot - fixed RLS policies and missing columns';
+-- Database schema updated for EaselyBot - fixed RLS policies and missing columns
 
 -- Show completion message
 DO $$

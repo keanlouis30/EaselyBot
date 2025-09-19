@@ -214,8 +214,8 @@ class CanvasAPIClient:
             List of upcoming assignment dictionaries
         """
         try:
-            from datetime import datetime, timedelta
-            cutoff_date = datetime.now() + timedelta(days=days_ahead)
+            from datetime import datetime, timedelta, timezone
+            cutoff_date = datetime.now(timezone.utc) + timedelta(days=days_ahead)
             
             all_assignments = self.get_assignments(token, limit=50)
             upcoming = []
