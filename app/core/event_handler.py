@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from app.api import messenger_api
+from app.database.supabase_client import get_user, create_user, update_user_last_seen, get_user_session, set_user_session, clear_user_session
 
 logger = logging.getLogger(__name__)
 
@@ -29,16 +30,28 @@ def handle_message(sender_id: str, text: str) -> None:
         # Convert message to lowercase for easier matching
         text_lower = text.lower().strip()
         
-        # Check for greetings and menu requests
-        if text_lower in ['hi', 'hello', 'hey', 'menu', 'help', 'start']:
+        # For any message, first check if user exists and update last seen
+        user = get_user(sender_id)
+        if user:
+            # Update last seen for existing users
+            update_user_last_seen(sender_id)
+        
+        # Check for greetings and menu requests - or ANY message from new users
+        if text_lower in ['hi', 'hello', 'hey', 'menu', 'help', 'start'] or not user:
             # Check if user is new or returning
             if is_new_user(sender_id):
                 # Send onboarding flow for new users
                 messenger_api.send_privacy_policy_consent(sender_id)
-                mark_user_seen(sender_id)
+                # Create user record in database
+                try:
+                    create_user(sender_id, first_interaction_message=text)
+                    logger.info(f"Created new user record for {sender_id}")
+                except Exception as e:
+                    logger.error(f"Error creating user record: {e}")
             else:
                 # Send main menu for returning users
                 messenger_api.send_main_menu(sender_id)
+                return  # Exit early for returning users
         
         # Handle Canvas token input
         elif is_waiting_for_token(sender_id):
@@ -275,6 +288,17 @@ def handle_terms_read(sender_id: str) -> None:
 def handle_final_consent_agreement(sender_id: str) -> None:
     """Handle final consent - start Canvas setup"""
     set_user_state(sender_id, "onboarding_complete")
+    
+    # Mark onboarding as complete in the database
+    try:
+        user = get_user(sender_id)
+        if user:
+            from app.database.supabase_client import update_user
+            update_user(sender_id, {'onboarding_completed': True})
+            logger.info(f"Marked onboarding complete for user {sender_id}")
+    except Exception as e:
+        logger.error(f"Error updating onboarding status: {str(e)}")
+    
     messenger_api.send_text_message(
         sender_id,
         "🎉 Great! Now let's connect you to Canvas so I can help manage your assignments and deadlines."
@@ -631,55 +655,124 @@ def handle_premium_activation(sender_id: str) -> None:
 
 def is_new_user(sender_id: str) -> bool:
     """Check if user is new (hasn't completed onboarding)"""
-    # In production, check database
-    if sender_id not in user_sessions:
+    try:
+        # Check database for existing user
+        user = get_user(sender_id)
+        if not user:
+            return True  # User doesn't exist in database - they are new
+        
+        # Check if user has completed onboarding by checking their onboarding status
+        onboarding_complete = user.get('onboarding_completed', False)
+        if not onboarding_complete:
+            return True  # User exists but hasn't completed onboarding
+        
+        # User exists and has completed onboarding
+        return False
+        
+    except Exception as e:
+        logger.error(f"Error checking user status for {sender_id}: {str(e)}")
+        # Default to treating as new user if we can't determine status
         return True
-    
-    # Check if user has completed onboarding
-    user_state = user_sessions[sender_id].get('state', '')
-    return user_state not in ['onboarding_complete', 'token_verified']
 
 
 def mark_user_seen(sender_id: str) -> None:
-    """Mark user as seen"""
-    if sender_id not in user_sessions:
-        user_sessions[sender_id] = {}
-    user_sessions[sender_id]['seen'] = True
+    """Mark user as seen - deprecated, using database instead"""
+    # This function is now handled by update_user_last_seen from database client
+    pass
 
 
 def set_user_state(sender_id: str, state: str) -> None:
     """Set user state for conversation flow"""
-    if sender_id not in user_sessions:
-        user_sessions[sender_id] = {}
-    user_sessions[sender_id]['state'] = state
+    try:
+        # Store state in database session instead of memory
+        set_user_session(sender_id, 'conversation_state', state, 24)
+        
+        # Keep backward compatibility with memory sessions for now
+        if sender_id not in user_sessions:
+            user_sessions[sender_id] = {}
+        user_sessions[sender_id]['state'] = state
+        
+    except Exception as e:
+        logger.error(f"Error setting user state: {str(e)}")
+        # Fallback to memory session
+        if sender_id not in user_sessions:
+            user_sessions[sender_id] = {}
+        user_sessions[sender_id]['state'] = state
 
 
 def clear_user_state(sender_id: str) -> None:
     """Clear user state"""
-    if sender_id in user_sessions and 'state' in user_sessions[sender_id]:
-        del user_sessions[sender_id]['state']
+    try:
+        # Clear state from database session
+        clear_user_session(sender_id, 'conversation_state')
+        
+        # Clear from memory session too
+        if sender_id in user_sessions and 'state' in user_sessions[sender_id]:
+            del user_sessions[sender_id]['state']
+            
+    except Exception as e:
+        logger.error(f"Error clearing user state: {str(e)}")
+        # Fallback to clearing memory session only
+        if sender_id in user_sessions and 'state' in user_sessions[sender_id]:
+            del user_sessions[sender_id]['state']
 
 
 def is_waiting_for_token(sender_id: str) -> bool:
     """Check if waiting for token input"""
+    try:
+        # Check database session first
+        db_state = get_user_session(sender_id, 'conversation_state')
+        if db_state == 'waiting_for_token':
+            return True
+    except Exception as e:
+        logger.debug(f"Error checking database session: {str(e)}")
+    
+    # Fallback to memory session
     return (sender_id in user_sessions and 
             user_sessions[sender_id].get('state') == 'waiting_for_token')
 
 
 def is_waiting_for_task_title(sender_id: str) -> bool:
     """Check if waiting for task title input"""
+    try:
+        # Check database session first
+        db_state = get_user_session(sender_id, 'conversation_state')
+        if db_state == 'waiting_for_task_title':
+            return True
+    except Exception as e:
+        logger.debug(f"Error checking database session: {str(e)}")
+    
+    # Fallback to memory session
     return (sender_id in user_sessions and 
             user_sessions[sender_id].get('state') == 'waiting_for_task_title')
 
 
 def is_waiting_for_custom_date(sender_id: str) -> bool:
     """Check if waiting for custom date input"""
+    try:
+        # Check database session first
+        db_state = get_user_session(sender_id, 'conversation_state')
+        if db_state == 'waiting_for_custom_date':
+            return True
+    except Exception as e:
+        logger.debug(f"Error checking database session: {str(e)}")
+    
+    # Fallback to memory session
     return (sender_id in user_sessions and 
             user_sessions[sender_id].get('state') == 'waiting_for_custom_date')
 
 
 def is_waiting_for_custom_time(sender_id: str) -> bool:
     """Check if waiting for custom time input"""
+    try:
+        # Check database session first
+        db_state = get_user_session(sender_id, 'conversation_state')
+        if db_state == 'waiting_for_custom_time':
+            return True
+    except Exception as e:
+        logger.debug(f"Error checking database session: {str(e)}")
+    
+    # Fallback to memory session
     return (sender_id in user_sessions and 
             user_sessions[sender_id].get('state') == 'waiting_for_custom_time')
 
