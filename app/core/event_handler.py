@@ -5,7 +5,7 @@ Processes incoming messages and determines appropriate responses
 
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from app.api import messenger_api
 from app.database.supabase_client import get_user, create_user, update_user_last_seen, get_user_session, set_user_session, clear_user_session
 
@@ -411,6 +411,10 @@ def handle_token_ready(sender_id: str) -> None:
         "🔒 Your token will be encrypted and stored securely."
     )
 
+def handle_token_tutorial(sender_id: str) -> None:
+    """Show token tutorial - same as need help"""
+    handle_token_need_help(sender_id)
+
 
 def handle_token_input(sender_id: str, token: str) -> None:
     """
@@ -581,94 +585,280 @@ def handle_token_input(sender_id: str, token: str) -> None:
 
 # Task management handlers
 
-def handle_get_tasks_today(sender_id: str) -> None:
-    """Show tasks due today"""
-    # In production, fetch from database
-    tasks = [
-        {
-            "title": "Math Assignment",
-            "course": "Calculus 101",
-            "due_date": "Today at 11:59 PM"
-        }
-    ]
+def get_user_canvas_token(sender_id: str) -> Optional[str]:
+    """Get user's Canvas token from database"""
+    try:
+        user = get_user(sender_id)
+        if user and user.get('canvas_token'):
+            return user['canvas_token']
+        return None
+    except Exception as e:
+        logger.error(f"Error getting Canvas token for user {sender_id}: {str(e)}")
+        return None
+
+def filter_assignments_by_date(assignments: List[Dict], filter_type: str) -> List[Dict]:
+    """Filter assignments by date criteria"""
+    from datetime import datetime, timedelta, timezone
     
-    messenger_api.send_task_list(
-        sender_id,
-        tasks,
-        "🔥 Tasks Due Today"
-    )
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    week_end = now + timedelta(days=7)
+    
+    filtered = []
+    
+    for assignment in assignments:
+        if not assignment.get('due_date'):
+            continue
+            
+        try:
+            due_date = datetime.fromisoformat(assignment['due_date'].replace('Z', '+00:00'))
+            
+            if filter_type == 'today':
+                if today_start <= due_date <= today_end:
+                    filtered.append(assignment)
+            elif filter_type == 'week':
+                if due_date <= week_end:
+                    filtered.append(assignment)
+            elif filter_type == 'overdue':
+                if due_date < now:
+                    filtered.append(assignment)
+            elif filter_type == 'all':
+                if due_date >= now:  # Only future assignments
+                    filtered.append(assignment)
+                    
+        except (ValueError, AttributeError) as e:
+            logger.debug(f"Error parsing date {assignment.get('due_date')}: {e}")
+            continue
+    
+    return filtered
+
+def format_assignment_message(assignment: Dict) -> str:
+    """Format a single assignment into a readable message"""
+    from datetime import datetime
+    
+    title = assignment.get('title', 'Untitled Assignment')
+    course_name = assignment.get('course_name', 'Unknown Course')
+    course_code = assignment.get('course_code', '')
+    
+    # Format the course display
+    course_display = f"{course_name}"
+    if course_code and course_code != course_name:
+        course_display = f"{course_name} ({course_code})"
+    
+    # Format due date
+    try:
+        due_date = datetime.fromisoformat(assignment['due_date'].replace('Z', '+00:00'))
+        now = datetime.now(due_date.tzinfo)
+        
+        # Calculate time difference
+        time_diff = due_date - now
+        days = time_diff.days
+        hours = time_diff.seconds // 3600
+        
+        if days > 0:
+            due_str = due_date.strftime('%m/%d at %I:%M %p')
+            if days == 1:
+                due_str += " (Tomorrow)"
+            else:
+                due_str += f" (In {days} days)"
+        elif days == 0:
+            if hours > 1:
+                due_str = due_date.strftime('Today at %I:%M %p') + f" (In {hours}h)"
+            else:
+                due_str = due_date.strftime('Today at %I:%M %p') + " (Soon!)"
+        else:
+            days_overdue = abs(days)
+            if days_overdue == 1:
+                due_str = due_date.strftime('%m/%d at %I:%M %p') + " (1 day overdue)"
+            else:
+                due_str = due_date.strftime('%m/%d at %I:%M %p') + f" ({days_overdue} days overdue)"
+    except:
+        due_str = assignment.get('due_date', 'Date unknown')
+    
+    # Create message
+    message = f"📚 **{title}**\n"
+    message += f"🏫 {course_display}\n"
+    message += f"📅 Due: {due_str}"
+    
+    # Add points if available
+    points = assignment.get('points_possible')
+    if points:
+        message += f"\n🎯 Points: {points}"
+    
+    return message
+
+def send_assignments_individually(sender_id: str, assignments: List[Dict], header: str) -> None:
+    """Send assignments one message at a time"""
+    if not assignments:
+        messenger_api.send_text_message(sender_id, f"{header}\n\n✨ No assignments found!")
+        messenger_api.send_main_menu(sender_id)
+        return
+    
+    # Send header message
+    count = len(assignments)
+    plural = "assignment" if count == 1 else "assignments"
+    messenger_api.send_text_message(sender_id, f"{header}\n\nFound {count} {plural}:")
+    
+    # Send each assignment as individual message
+    import time
+    for assignment in assignments[:15]:  # Limit to 15 to avoid spam
+        message = format_assignment_message(assignment)
+        messenger_api.send_text_message(sender_id, message)
+        time.sleep(0.5)  # Small delay to avoid rate limits
+    
+    if len(assignments) > 15:
+        messenger_api.send_text_message(sender_id, f"... and {len(assignments) - 15} more assignments")
     
     # Show menu again for easy navigation
     messenger_api.send_main_menu(sender_id)
 
+def handle_get_tasks_today(sender_id: str) -> None:
+    """Show tasks due today"""
+    try:
+        # Get user's Canvas token
+        token = get_user_canvas_token(sender_id)
+        if not token:
+            messenger_api.send_text_message(
+                sender_id,
+                "⚠️ I need your Canvas access token to fetch your assignments. Please set up Canvas integration first."
+            )
+            messenger_api.send_main_menu(sender_id)
+            return
+        
+        # Show typing indicator
+        messenger_api.send_typing_indicator(sender_id, "typing_on")
+        
+        # Fetch assignments from Canvas
+        from app.api.canvas_api import fetch_user_assignments
+        assignments = fetch_user_assignments(token, limit=50)
+        
+        # Filter for today
+        today_assignments = filter_assignments_by_date(assignments, 'today')
+        
+        # Send assignments individually
+        send_assignments_individually(sender_id, today_assignments, "🔥 Tasks Due Today")
+        
+    except Exception as e:
+        logger.error(f"Error fetching today's tasks for user {sender_id}: {str(e)}")
+        messenger_api.send_text_message(
+            sender_id,
+            "❌ Sorry, I couldn't fetch your assignments right now. Please try again later."
+        )
+        messenger_api.send_main_menu(sender_id)
+    finally:
+        messenger_api.send_typing_indicator(sender_id, "typing_off")
+
 
 def handle_get_tasks_week(sender_id: str) -> None:
     """Show tasks due this week"""
-    # In production, fetch from database
-    tasks = [
-        {
-            "title": "Math Assignment",
-            "course": "Calculus 101",
-            "due_date": "Tomorrow at 11:59 PM"
-        },
-        {
-            "title": "Essay Draft",
-            "course": "English 201",
-            "due_date": "Thursday at 5:00 PM"
-        }
-    ]
-    
-    messenger_api.send_task_list(
-        sender_id,
-        tasks,
-        "⏰ Tasks Due This Week"
-    )
-    
-    messenger_api.send_main_menu(sender_id)
+    try:
+        # Get user's Canvas token
+        token = get_user_canvas_token(sender_id)
+        if not token:
+            messenger_api.send_text_message(
+                sender_id,
+                "⚠️ I need your Canvas access token to fetch your assignments. Please set up Canvas integration first."
+            )
+            messenger_api.send_main_menu(sender_id)
+            return
+        
+        # Show typing indicator
+        messenger_api.send_typing_indicator(sender_id, "typing_on")
+        
+        # Fetch assignments from Canvas
+        from app.api.canvas_api import fetch_user_assignments
+        assignments = fetch_user_assignments(token, limit=50)
+        
+        # Filter for this week
+        week_assignments = filter_assignments_by_date(assignments, 'week')
+        
+        # Send assignments individually
+        send_assignments_individually(sender_id, week_assignments, "⏰ Tasks Due This Week")
+        
+    except Exception as e:
+        logger.error(f"Error fetching week's tasks for user {sender_id}: {str(e)}")
+        messenger_api.send_text_message(
+            sender_id,
+            "❌ Sorry, I couldn't fetch your assignments right now. Please try again later."
+        )
+        messenger_api.send_main_menu(sender_id)
+    finally:
+        messenger_api.send_typing_indicator(sender_id, "typing_off")
 
 
 def handle_get_tasks_overdue(sender_id: str) -> None:
     """Show overdue tasks"""
-    # In production, fetch from database
-    tasks = []  # Empty for demo
-    
-    messenger_api.send_task_list(
-        sender_id,
-        tasks,
-        "❗️ Overdue Tasks"
-    )
-    
-    messenger_api.send_main_menu(sender_id)
+    try:
+        # Get user's Canvas token
+        token = get_user_canvas_token(sender_id)
+        if not token:
+            messenger_api.send_text_message(
+                sender_id,
+                "⚠️ I need your Canvas access token to fetch your assignments. Please set up Canvas integration first."
+            )
+            messenger_api.send_main_menu(sender_id)
+            return
+        
+        # Show typing indicator
+        messenger_api.send_typing_indicator(sender_id, "typing_on")
+        
+        # Fetch assignments from Canvas
+        from app.api.canvas_api import fetch_user_assignments
+        assignments = fetch_user_assignments(token, limit=50)
+        
+        # Filter for overdue
+        overdue_assignments = filter_assignments_by_date(assignments, 'overdue')
+        
+        # Send assignments individually
+        send_assignments_individually(sender_id, overdue_assignments, "❗️ Overdue Tasks")
+        
+    except Exception as e:
+        logger.error(f"Error fetching overdue tasks for user {sender_id}: {str(e)}")
+        messenger_api.send_text_message(
+            sender_id,
+            "❌ Sorry, I couldn't fetch your assignments right now. Please try again later."
+        )
+        messenger_api.send_main_menu(sender_id)
+    finally:
+        messenger_api.send_typing_indicator(sender_id, "typing_off")
 
 
 def handle_get_tasks_all(sender_id: str) -> None:
     """Show all upcoming tasks"""
-    # In production, fetch from database
-    tasks = [
-        {
-            "title": "Math Assignment",
-            "course": "Calculus 101",
-            "due_date": "Tomorrow at 11:59 PM"
-        },
-        {
-            "title": "Essay Draft",
-            "course": "English 201",
-            "due_date": "Thursday at 5:00 PM"
-        },
-        {
-            "title": "Lab Report",
-            "course": "Chemistry 301",
-            "due_date": "Next Monday at 9:00 AM"
-        }
-    ]
-    
-    messenger_api.send_task_list(
-        sender_id,
-        tasks,
-        "🗓 All Upcoming Tasks"
-    )
-    
-    messenger_api.send_main_menu(sender_id)
+    try:
+        # Get user's Canvas token
+        token = get_user_canvas_token(sender_id)
+        if not token:
+            messenger_api.send_text_message(
+                sender_id,
+                "⚠️ I need your Canvas access token to fetch your assignments. Please set up Canvas integration first."
+            )
+            messenger_api.send_main_menu(sender_id)
+            return
+        
+        # Show typing indicator
+        messenger_api.send_typing_indicator(sender_id, "typing_on")
+        
+        # Fetch assignments from Canvas
+        from app.api.canvas_api import fetch_user_assignments
+        assignments = fetch_user_assignments(token, limit=50)
+        
+        # Filter for all upcoming (future assignments)
+        upcoming_assignments = filter_assignments_by_date(assignments, 'all')
+        
+        # Send assignments individually
+        send_assignments_individually(sender_id, upcoming_assignments, "🗾 All Upcoming Tasks")
+        
+    except Exception as e:
+        logger.error(f"Error fetching all tasks for user {sender_id}: {str(e)}")
+        messenger_api.send_text_message(
+            sender_id,
+            "❌ Sorry, I couldn't fetch your assignments right now. Please try again later."
+        )
+        messenger_api.send_main_menu(sender_id)
+    finally:
+        messenger_api.send_typing_indicator(sender_id, "typing_off")
 
 
 def handle_add_new_task(sender_id: str) -> None:
