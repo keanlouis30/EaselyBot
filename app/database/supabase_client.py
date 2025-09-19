@@ -299,12 +299,21 @@ def cache_canvas_assignments(facebook_id: str, assignments: List[Dict[str, Any]]
     try:
         from datetime import datetime, timezone
         
+        # Use admin client to bypass RLS for Canvas caching operations
+        admin_client = supabase_client.admin_client
+        
         # First, clear existing cached assignments for this user
-        supabase_client.client.table('tasks').delete().eq('facebook_id', facebook_id).eq('task_type', 'canvas').execute()
+        admin_client.table('tasks').delete().eq('facebook_id', facebook_id).eq('task_type', 'canvas').execute()
         
         # Insert new assignments
         cached_tasks = []
         for assignment in assignments:
+            # Ensure we have required fields
+            assignment_id = assignment.get('id')
+            if not assignment_id:
+                logger.warning(f"Skipping assignment without ID: {assignment.get('title')}")
+                continue
+                
             task_data = {
                 'facebook_id': facebook_id,
                 'title': assignment.get('title', 'Untitled Assignment'),
@@ -312,9 +321,8 @@ def cache_canvas_assignments(facebook_id: str, assignments: List[Dict[str, Any]]
                 'status': 'pending',
                 'task_type': 'canvas',
                 'priority': 'medium',
-                'canvas_assignment_id': assignment.get('id'),
+                'canvas_assignment_id': str(assignment_id),  # Ensure it's a string
                 'course_name': assignment.get('course_name'),
-                'course_code': assignment.get('course_code'),
                 'description': assignment.get('description'),
                 'canvas_points_possible': assignment.get('points_possible'),
                 'canvas_html_url': assignment.get('html_url'),
@@ -324,7 +332,7 @@ def cache_canvas_assignments(facebook_id: str, assignments: List[Dict[str, Any]]
             cached_tasks.append(task_data)
         
         if cached_tasks:
-            supabase_client.client.table('tasks').insert(cached_tasks).execute()
+            admin_client.table('tasks').insert(cached_tasks).execute()
             logger.info(f"Cached {len(cached_tasks)} Canvas assignments for user {facebook_id}")
         
         # Update user's last sync timestamp
@@ -409,7 +417,7 @@ def sync_canvas_assignments(facebook_id: str, token: str, force_refresh: bool = 
             # Log successful sync
             log_canvas_sync(
                 facebook_id, 
-                'automatic', 
+                'full',  # Changed from 'automatic' to valid sync_type
                 'success', 
                 len(assignments)
             )
@@ -420,8 +428,8 @@ def sync_canvas_assignments(facebook_id: str, token: str, force_refresh: bool = 
             # Log failed sync but return cached data if available
             log_canvas_sync(
                 facebook_id,
-                'automatic',
-                'no_data',
+                'full',  # Changed from 'automatic' which isn't valid
+                'failed',  # Changed from 'no_data' to valid status
                 0,
                 'No assignments returned from Canvas API'
             )
@@ -438,8 +446,8 @@ def sync_canvas_assignments(facebook_id: str, token: str, force_refresh: bool = 
         # Log failed sync
         log_canvas_sync(
             facebook_id,
-            'automatic',
-            'error',
+            'full',  # Changed from 'automatic' to valid sync_type
+            'failed',  # Changed from 'error' to valid status
             0,
             str(e)
         )

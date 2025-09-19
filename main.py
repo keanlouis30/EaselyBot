@@ -178,8 +178,8 @@ def process_message_event(event):
             logger.warning(f"Event missing sender ID: {event}")
             return
         
-        # Log the raw webhook event
-        log_webhook_event("message_event", sender_id, event, "processing")
+        # Log the raw webhook event (will be updated with final status later)
+        # log_webhook_event("message_event", sender_id, event, "success")  # Skip initial logging to avoid duplicate
         
         # Handle different types of events
         if 'message' in event:
@@ -280,11 +280,25 @@ def process_message_event(event):
                 sender_id,
                 "👋 Welcome! I'm Easely, your Canvas assistant. Let me help you get started!"
             )
+        
+        elif 'delivery' in event:
+            # Handle delivery confirmations (when our messages are delivered)
+            event_type = "delivery"
+            logger.debug(f"Message delivery confirmation from {sender_id}")
+            # Don't need to respond to delivery confirmations, just log them
+            processing_status = "success"  # Mark as successfully processed (ignored)
+            
+        elif 'read' in event:
+            # Handle read receipts (when user reads our messages)
+            event_type = "read"
+            logger.debug(f"Message read receipt from {sender_id}")
+            # Don't need to respond to read receipts, just log them
+            processing_status = "success"  # Mark as successfully processed (ignored)
             
         else:
             event_type = "unhandled"
             logger.warning(f"Unhandled event type from {sender_id}: {list(event.keys())}")
-            processing_status = "warning"
+            processing_status = "success"  # Change from "warning" to "success" to avoid DB constraint issues
             error_message = f"Unhandled event type: {list(event.keys())}"
             
     except Exception as e:
