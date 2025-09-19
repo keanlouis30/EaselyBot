@@ -338,6 +338,99 @@ def update_transaction_status(transaction_id: str, status: str, completed_at: st
         logger.error(f"Error updating transaction {transaction_id}: {str(e)}")
         raise
 
+# Message Logging Functions
+def log_user_message(facebook_id: str, message_type: str, message_content: str, event_data: Dict = None, response_action: str = None):
+    """Log incoming user messages and bot responses"""
+    try:
+        log_data = {
+            'facebook_id': facebook_id,
+            'message_type': message_type,  # 'text', 'postback', 'quick_reply'
+            'message_content': message_content,
+            'response_action': response_action,  # what action the bot took
+            'timestamp': 'now()'
+        }
+        
+        if event_data:
+            log_data['event_data'] = event_data
+        
+        supabase_client.client.table('message_logs').insert(log_data).execute()
+    
+    except Exception as e:
+        logger.error(f"Error logging message for user {facebook_id}: {str(e)}")
+
+def log_webhook_event(event_type: str, sender_id: str, event_data: Dict, processing_status: str, error_message: str = None):
+    """Log webhook events for debugging and analytics"""
+    try:
+        log_data = {
+            'event_type': event_type,
+            'sender_id': sender_id,
+            'event_data': event_data,
+            'processing_status': processing_status,  # 'success', 'error', 'warning'
+            'timestamp': 'now()'
+        }
+        
+        if error_message:
+            log_data['error_message'] = error_message
+        
+        supabase_client.client.table('webhook_logs').insert(log_data).execute()
+    
+    except Exception as e:
+        logger.error(f"Error logging webhook event: {str(e)}")
+
+def log_conversation_state(facebook_id: str, previous_state: str, new_state: str, trigger_action: str):
+    """Log conversation state transitions for analytics"""
+    try:
+        log_data = {
+            'facebook_id': facebook_id,
+            'previous_state': previous_state,
+            'new_state': new_state,
+            'trigger_action': trigger_action,
+            'timestamp': 'now()'
+        }
+        
+        supabase_client.client.table('conversation_states').insert(log_data).execute()
+    
+    except Exception as e:
+        logger.error(f"Error logging conversation state for user {facebook_id}: {str(e)}")
+
+def log_bot_action(facebook_id: str, action_type: str, action_details: Dict = None, success: bool = True, error_message: str = None):
+    """Log bot actions for analytics and debugging"""
+    try:
+        log_data = {
+            'facebook_id': facebook_id,
+            'action_type': action_type,  # 'send_message', 'api_call', 'task_created', etc.
+            'success': success,
+            'timestamp': 'now()'
+        }
+        
+        if action_details:
+            log_data['action_details'] = action_details
+            
+        if error_message:
+            log_data['error_message'] = error_message
+        
+        supabase_client.client.table('bot_actions').insert(log_data).execute()
+    
+    except Exception as e:
+        logger.error(f"Error logging bot action for user {facebook_id}: {str(e)}")
+
+def log_user_analytics(facebook_id: str, event_type: str, event_data: Dict = None):
+    """Log user behavior for analytics"""
+    try:
+        log_data = {
+            'facebook_id': facebook_id,
+            'event_type': event_type,  # 'session_start', 'token_validated', 'task_created', 'premium_upgraded', etc.
+            'timestamp': 'now()'
+        }
+        
+        if event_data:
+            log_data['event_data'] = event_data
+        
+        supabase_client.client.table('user_analytics').insert(log_data).execute()
+    
+    except Exception as e:
+        logger.error(f"Error logging user analytics for user {facebook_id}: {str(e)}")
+
 # Utility Functions
 def get_user_stats(facebook_id: str) -> Dict[str, int]:
     """Get user statistics"""

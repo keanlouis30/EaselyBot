@@ -319,7 +319,7 @@ def handle_final_consent_decline(sender_id: str) -> None:
 
 def handle_token_know_how(sender_id: str) -> None:
     """Handle user who knows how to generate token"""
-    set_user_state(sender_id, "waiting_for_token")
+    set_user_state(sender_id, "waiting_for_token", "user_clicked_token_know_how")
     messenger_api.send_text_message(
         sender_id,
         "🔑 Perfect! Please paste your Canvas Access Token here. \n\n"
@@ -384,7 +384,7 @@ def handle_watch_video(sender_id: str) -> None:
 
 def handle_token_ready(sender_id: str) -> None:
     """Handle user ready to input token"""
-    set_user_state(sender_id, "waiting_for_token")
+    set_user_state(sender_id, "waiting_for_token", "user_clicked_token_ready")
     messenger_api.send_text_message(
         sender_id,
         "🔑 Excellent! Please paste your Canvas Access Token here:\n\n"
@@ -461,7 +461,14 @@ def handle_token_input(sender_id: str, token: str) -> None:
     
     # Clear the waiting state and mark onboarding complete
     clear_user_state(sender_id)
-    set_user_state(sender_id, "token_verified")
+    set_user_state(sender_id, "token_verified", "token_validation_success")
+    
+    # Log analytics event
+    try:
+        from app.database.supabase_client import log_user_analytics
+        log_user_analytics(sender_id, "token_validated", {"token_length": len(token)})
+    except Exception as e:
+        logger.debug(f"Error logging analytics: {e}")
     
     # Offer premium upgrade
     quick_replies = [
@@ -570,7 +577,7 @@ def handle_get_tasks_all(sender_id: str) -> None:
 
 def handle_add_new_task(sender_id: str) -> None:
     """Start the flow for adding a new task"""
-    set_user_state(sender_id, "waiting_for_task_title")
+    set_user_state(sender_id, "waiting_for_task_title", "user_clicked_add_new_task")
     messenger_api.send_text_message(
         sender_id,
         "Let's add a new task! What's the title of your task?"
@@ -839,9 +846,16 @@ def mark_user_seen(sender_id: str) -> None:
     pass
 
 
-def set_user_state(sender_id: str, state: str) -> None:
-    """Set user state for conversation flow"""
+def set_user_state(sender_id: str, state: str, trigger_action: str = "unknown") -> None:
+    """Set user state for conversation flow with logging"""
     try:
+        # Get previous state for logging
+        previous_state = None
+        try:
+            previous_state = get_user_session(sender_id, 'conversation_state') or "none"
+        except:
+            previous_state = user_sessions.get(sender_id, {}).get('state', 'none')
+        
         # Store state in database session instead of memory
         set_user_session(sender_id, 'conversation_state', state, 24)
         
@@ -849,6 +863,13 @@ def set_user_state(sender_id: str, state: str) -> None:
         if sender_id not in user_sessions:
             user_sessions[sender_id] = {}
         user_sessions[sender_id]['state'] = state
+        
+        # Log the state change
+        try:
+            from app.database.supabase_client import log_conversation_state
+            log_conversation_state(sender_id, previous_state, state, trigger_action)
+        except Exception as log_error:
+            logger.debug(f"Error logging conversation state: {log_error}")
         
     except Exception as e:
         logger.error(f"Error setting user state: {str(e)}")

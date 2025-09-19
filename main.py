@@ -160,45 +160,158 @@ def setup_bot():
 
 def process_message_event(event):
     """
-    Process individual message events from the webhook
+    Process individual message events from the webhook with comprehensive logging
     
     Args:
         event: Message event from Facebook Messenger
     """
+    from app.database.supabase_client import log_webhook_event, log_user_message
+    
+    sender_id = None
+    event_type = "unknown"
+    processing_status = "success"
+    error_message = None
+    
     try:
-        sender_id = event['sender']['id']
+        sender_id = event.get('sender', {}).get('id')
+        if not sender_id:
+            logger.warning(f"Event missing sender ID: {event}")
+            return
+        
+        # Log the raw webhook event
+        log_webhook_event("message_event", sender_id, event, "processing")
         
         # Handle different types of events
         if 'message' in event:
-            # Text message or quick reply
             message = event['message']
             
             if 'quick_reply' in message:
                 # Handle quick reply payload
                 payload = message['quick_reply']['payload']
+                event_type = "quick_reply"
                 logger.info(f"Received quick reply from {sender_id}: {payload}")
+                
+                # Log the user interaction
+                log_user_message(
+                    sender_id, 
+                    "quick_reply", 
+                    payload, 
+                    event_data=event, 
+                    response_action=f"handle_postback({payload})"
+                )
+                
                 handle_postback(sender_id, payload)
-            
+                
             elif 'text' in message:
                 # Handle regular text message
                 text = message['text']
+                event_type = "text_message"
                 logger.info(f"Received message from {sender_id}: {text}")
+                
+                # Log the user interaction
+                log_user_message(
+                    sender_id, 
+                    "text", 
+                    text, 
+                    event_data=event, 
+                    response_action=f"handle_message({text[:50]}...)"
+                )
+                
                 handle_message(sender_id, text)
+                
+            elif 'attachments' in message:
+                # Handle attachments (files, images, etc.)
+                attachments = message['attachments']
+                event_type = "attachment"
+                attachment_types = [att.get('type', 'unknown') for att in attachments]
+                logger.info(f"Received attachment from {sender_id}: {attachment_types}")
+                
+                # Log the attachment
+                log_user_message(
+                    sender_id, 
+                    "attachment", 
+                    f"Attachments: {', '.join(attachment_types)}", 
+                    event_data=event, 
+                    response_action="attachment_received"
+                )
+                
+                # Handle attachments (could add specific handler if needed)
+                from app.api.messenger_api import send_text_message
+                send_text_message(
+                    sender_id,
+                    "I received your attachment, but I can only process text messages right now. Please send me a text message!"
+                )
         
         elif 'postback' in event:
             # Handle postback from persistent menu or buttons
             payload = event['postback']['payload']
+            event_type = "postback"
             logger.info(f"Received postback from {sender_id}: {payload}")
+            
+            # Log the user interaction
+            log_user_message(
+                sender_id, 
+                "postback", 
+                payload, 
+                event_data=event, 
+                response_action=f"handle_postback({payload})"
+            )
+            
             handle_postback(sender_id, payload)
         
         elif 'referral' in event:
             # Handle m.me links or ads
             referral = event['referral']['ref']
+            event_type = "referral"
             logger.info(f"Received referral from {sender_id}: {referral}")
-            # Handle referral if needed
+            
+            # Log the referral
+            log_user_message(
+                sender_id, 
+                "referral", 
+                referral, 
+                event_data=event, 
+                response_action="referral_received"
+            )
+            
+            # Handle referral - could trigger onboarding or specific flow
+            from app.api.messenger_api import send_text_message
+            send_text_message(
+                sender_id,
+                "👋 Welcome! I'm Easely, your Canvas assistant. Let me help you get started!"
+            )
+            
+        else:
+            event_type = "unhandled"
+            logger.warning(f"Unhandled event type from {sender_id}: {list(event.keys())}")
+            processing_status = "warning"
+            error_message = f"Unhandled event type: {list(event.keys())}"
             
     except Exception as e:
+        processing_status = "error"
+        error_message = str(e)
         logger.error(f"Error processing message event: {str(e)}")
+        
+        # Log the error even if we couldn't process the event
+        if sender_id:
+            try:
+                log_user_message(
+                    sender_id, 
+                    event_type, 
+                    "ERROR", 
+                    event_data=event, 
+                    response_action=f"error: {str(e)}"
+                )
+            except:
+                pass  # Don't let logging errors crash the webhook
+        
+    finally:
+        # Log the final webhook processing status
+        if sender_id:
+            try:
+                log_webhook_event(event_type, sender_id, event, processing_status, error_message)
+            except:
+                pass  # Don't let logging errors crash the webhook
 
 
 @app.errorhandler(404)
