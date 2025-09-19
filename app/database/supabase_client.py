@@ -406,7 +406,7 @@ def sync_canvas_assignments(facebook_id: str, token: str, force_refresh: bool = 
         logger.info(f"Fetching fresh Canvas assignments for user {facebook_id}")
         from app.api.canvas_api import fetch_user_assignments
         
-        assignments = fetch_user_assignments(token, limit=100)
+        assignments = fetch_user_assignments(token, limit=200)
         logger.info(f"Canvas API returned {len(assignments) if assignments else 0} assignments")
         
         if assignments:

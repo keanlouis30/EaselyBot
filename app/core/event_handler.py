@@ -14,6 +14,20 @@ logger = logging.getLogger(__name__)
 # Store user session data (in production, use proper database)
 user_sessions = {}
 
+# Timezone utilities for consistent Manila time handling
+def get_manila_now():
+    """Get current datetime in Manila timezone"""
+    import pytz
+    from datetime import datetime, timezone
+    manila_tz = pytz.timezone('Asia/Manila')
+    return datetime.now(timezone.utc).astimezone(manila_tz)
+
+def convert_to_manila_time(utc_datetime):
+    """Convert UTC datetime to Manila timezone"""
+    import pytz
+    manila_tz = pytz.timezone('Asia/Manila')
+    return utc_datetime.astimezone(manila_tz)
+
 
 def handle_message(sender_id: str, text: str) -> None:
     """
@@ -91,7 +105,7 @@ def handle_message(sender_id: str, text: str) -> None:
                 sender_id,
                 "I didn't understand that. Type 'menu' to see available options or 'help' for assistance."
             )
-            messenger_api.send_main_menu(sender_id)
+            # Don't automatically show the menu - let the user request it
         
     except Exception as e:
         logger.error(f"Error handling message from {sender_id}: {str(e)}")
@@ -209,7 +223,10 @@ def handle_postback(sender_id: str, payload: str) -> None:
         
         else:
             logger.warning(f"Unknown payload: {payload}")
-            messenger_api.send_main_menu(sender_id)
+            messenger_api.send_text_message(
+                sender_id,
+                "Sorry, I didn't recognize that action. Type 'menu' to see available options."
+            )
             
     except Exception as e:
         logger.error(f"Error handling postback from {sender_id}: {str(e)}")
@@ -613,34 +630,50 @@ def get_user_canvas_token(sender_id: str) -> Optional[str]:
         return None
 
 def filter_assignments_by_date(assignments: List[Dict], filter_type: str) -> List[Dict]:
-    """Filter assignments by date criteria"""
-    from datetime import datetime, timedelta, timezone
+    """Filter assignments by date criteria and exclude completed tasks"""
+    from datetime import datetime, timedelta
     
-    now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
-    week_end = now + timedelta(days=7)
+    # Use Manila timezone for local date/time logic
+    now_manila = get_manila_now()
+    
+    # Calculate date boundaries in Manila timezone
+    today_start = now_manila.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = now_manila.replace(hour=23, minute=59, second=59, microsecond=999999)
+    week_end = today_start + timedelta(days=7)
     
     filtered = []
     
     for assignment in assignments:
+        # Skip assignments without due dates
         if not assignment.get('due_date'):
             continue
             
+        # Skip completed assignments (if status field exists)
+        status = assignment.get('status', '').lower()
+        if status in ['completed', 'done', 'finished', 'submitted']:
+            logger.debug(f"Skipping completed assignment: {assignment.get('title')}")
+            continue
+            
         try:
-            due_date = datetime.fromisoformat(assignment['due_date'].replace('Z', '+00:00'))
+            # Parse due date and convert to Manila timezone for comparison
+            due_date_utc = datetime.fromisoformat(assignment['due_date'].replace('Z', '+00:00'))
+            due_date_manila = convert_to_manila_time(due_date_utc)
             
             if filter_type == 'today':
-                if today_start <= due_date <= today_end:
+                # Only assignments due TODAY in Manila time (not overdue)
+                if today_start <= due_date_manila <= today_end:
                     filtered.append(assignment)
             elif filter_type == 'week':
-                if due_date <= week_end:
+                # Only assignments due in the NEXT 7 days (including today but not overdue)
+                if today_start <= due_date_manila <= week_end:
                     filtered.append(assignment)
             elif filter_type == 'overdue':
-                if due_date < now:
+                # Only assignments that are past due in Manila time
+                if due_date_manila < today_start:  # Before today starts in Manila
                     filtered.append(assignment)
             elif filter_type == 'all':
-                if due_date >= now:  # Only future assignments
+                # All future assignments in Manila time (including today and beyond)
+                if due_date_manila >= today_start:
                     filtered.append(assignment)
                     
         except (ValueError, AttributeError) as e:
@@ -651,7 +684,8 @@ def filter_assignments_by_date(assignments: List[Dict], filter_type: str) -> Lis
 
 def format_assignment_message(assignment: Dict) -> str:
     """Format a single assignment into a readable message"""
-    from datetime import datetime
+    from datetime import datetime, timezone
+    import pytz
     
     title = assignment.get('title', 'Untitled Assignment')
     course_name = assignment.get('course_name', 'Unknown Course')
@@ -662,10 +696,11 @@ def format_assignment_message(assignment: Dict) -> str:
     if course_code and course_code != course_name:
         course_display = f"{course_name} ({course_code})"
     
-    # Format due date
+    # Format due date using Manila timezone
     try:
-        due_date = datetime.fromisoformat(assignment['due_date'].replace('Z', '+00:00'))
-        now = datetime.now(due_date.tzinfo)
+        due_date_utc = datetime.fromisoformat(assignment['due_date'].replace('Z', '+00:00'))
+        due_date = convert_to_manila_time(due_date_utc)
+        now = get_manila_now()
         
         # Calculate time difference
         time_diff = due_date - now
@@ -705,10 +740,14 @@ def format_assignment_message(assignment: Dict) -> str:
     return message
 
 def send_assignments_individually(sender_id: str, assignments: List[Dict], header: str) -> None:
-    """Send assignments one message at a time"""
+    """Send assignments - batch them to avoid Facebook's message limits"""
     if not assignments:
         messenger_api.send_text_message(sender_id, f"{header}\n\n✨ No assignments found!")
-        messenger_api.send_main_menu(sender_id)
+        # Add a simple prompt instead of the full menu
+        messenger_api.send_text_message(
+            sender_id, 
+            "Type 'menu' to see other options or ask me anything!"
+        )
         return
     
     # Send header message
@@ -716,18 +755,49 @@ def send_assignments_individually(sender_id: str, assignments: List[Dict], heade
     plural = "assignment" if count == 1 else "assignments"
     messenger_api.send_text_message(sender_id, f"{header}\n\nFound {count} {plural}:")
     
-    # Send each assignment as individual message
     import time
-    for assignment in assignments[:15]:  # Limit to 15 to avoid spam
-        message = format_assignment_message(assignment)
-        messenger_api.send_text_message(sender_id, message)
-        time.sleep(0.5)  # Small delay to avoid rate limits
     
-    if len(assignments) > 15:
-        messenger_api.send_text_message(sender_id, f"... and {len(assignments) - 15} more assignments")
+    # If more than 10 assignments, batch them to avoid Facebook truncating
+    if count > 10:
+        # Send first 10 individually
+        for assignment in assignments[:10]:
+            message = format_assignment_message(assignment)
+            messenger_api.send_text_message(sender_id, message)
+            time.sleep(0.5)  # Small delay to avoid rate limits
+        
+        # For remaining, create a summary message
+        remaining = assignments[10:]
+        summary = f"\n📋 **{len(remaining)} More Assignments:**\n\n"
+        
+        for assignment in remaining:
+            title = assignment.get('title', 'Untitled')[:50]  # Truncate long titles
+            course = assignment.get('course_code', assignment.get('course_name', ''))[:20]
+            
+            # Simple one-line format for remaining
+            try:
+                from datetime import datetime
+                due_date_utc = datetime.fromisoformat(assignment['due_date'].replace('Z', '+00:00'))
+                due_date = convert_to_manila_time(due_date_utc)
+                due_str = due_date.strftime('%m/%d')
+            except:
+                due_str = "?"
+            
+            summary += f"• {title} ({course}) - Due: {due_str}\n"
+        
+        # Send the summary in one message
+        messenger_api.send_text_message(sender_id, summary)
+    else:
+        # Send all assignments individually if 10 or less
+        for assignment in assignments:
+            message = format_assignment_message(assignment)
+            messenger_api.send_text_message(sender_id, message)
+            time.sleep(0.5)  # Small delay to avoid rate limits
     
-    # Show menu again for easy navigation
-    messenger_api.send_main_menu(sender_id)
+    # After showing all tasks, just give a simple prompt
+    messenger_api.send_text_message(
+        sender_id,
+        "\n💡 Type 'menu' for more options or 'help' if you need assistance!"
+    )
 
 def handle_get_tasks_today(sender_id: str) -> None:
     """Show tasks due today"""
@@ -739,7 +809,10 @@ def handle_get_tasks_today(sender_id: str) -> None:
                 sender_id,
                 "⚠️ I need your Canvas access token to fetch your assignments. Please set up Canvas integration first."
             )
-            messenger_api.send_main_menu(sender_id)
+            messenger_api.send_text_message(
+                sender_id,
+                "Type 'menu' to see options or 'help' to learn how to set up Canvas."
+            )
             return
         
         # Show typing indicator
@@ -761,7 +834,7 @@ def handle_get_tasks_today(sender_id: str) -> None:
             sender_id,
             "❌ Sorry, I couldn't fetch your assignments right now. Please try again later."
         )
-        messenger_api.send_main_menu(sender_id)
+        # Don't automatically show menu on error
     finally:
         messenger_api.send_typing_indicator(sender_id, "typing_off")
 
@@ -776,7 +849,10 @@ def handle_get_tasks_week(sender_id: str) -> None:
                 sender_id,
                 "⚠️ I need your Canvas access token to fetch your assignments. Please set up Canvas integration first."
             )
-            messenger_api.send_main_menu(sender_id)
+            messenger_api.send_text_message(
+                sender_id,
+                "Type 'menu' to see options or 'help' to learn how to set up Canvas."
+            )
             return
         
         # Show typing indicator
@@ -798,7 +874,7 @@ def handle_get_tasks_week(sender_id: str) -> None:
             sender_id,
             "❌ Sorry, I couldn't fetch your assignments right now. Please try again later."
         )
-        messenger_api.send_main_menu(sender_id)
+        # Don't automatically show menu on error
     finally:
         messenger_api.send_typing_indicator(sender_id, "typing_off")
 
@@ -813,7 +889,10 @@ def handle_get_tasks_overdue(sender_id: str) -> None:
                 sender_id,
                 "⚠️ I need your Canvas access token to fetch your assignments. Please set up Canvas integration first."
             )
-            messenger_api.send_main_menu(sender_id)
+            messenger_api.send_text_message(
+                sender_id,
+                "Type 'menu' to see options or 'help' to learn how to set up Canvas."
+            )
             return
         
         # Show typing indicator
@@ -835,7 +914,7 @@ def handle_get_tasks_overdue(sender_id: str) -> None:
             sender_id,
             "❌ Sorry, I couldn't fetch your assignments right now. Please try again later."
         )
-        messenger_api.send_main_menu(sender_id)
+        # Don't automatically show menu on error
     finally:
         messenger_api.send_typing_indicator(sender_id, "typing_off")
 
@@ -850,7 +929,10 @@ def handle_get_tasks_all(sender_id: str) -> None:
                 sender_id,
                 "⚠️ I need your Canvas access token to fetch your assignments. Please set up Canvas integration first."
             )
-            messenger_api.send_main_menu(sender_id)
+            messenger_api.send_text_message(
+                sender_id,
+                "Type 'menu' to see options or 'help' to learn how to set up Canvas."
+            )
             return
         
         # Show typing indicator
@@ -872,7 +954,7 @@ def handle_get_tasks_all(sender_id: str) -> None:
             sender_id,
             "❌ Sorry, I couldn't fetch your assignments right now. Please try again later."
         )
-        messenger_api.send_main_menu(sender_id)
+        # Don't automatically show menu on error
     finally:
         messenger_api.send_typing_indicator(sender_id, "typing_off")
 
@@ -929,12 +1011,15 @@ def handle_task_title_input(sender_id: str, title: str) -> None:
 
 def handle_date_selection(sender_id: str, payload: str) -> None:
     """Handle date selection for new task"""
+    # Use Manila timezone for date calculations
+    now_manila = get_manila_now()
+    
     if payload == "DATE_TODAY":
-        date = datetime.now().date()
+        date = now_manila.date()
     elif payload == "DATE_TOMORROW":
-        date = (datetime.now() + timedelta(days=1)).date()
+        date = (now_manila + timedelta(days=1)).date()
     elif payload == "DATE_NEXT_WEEK":
-        date = (datetime.now() + timedelta(weeks=1)).date()
+        date = (now_manila + timedelta(weeks=1)).date()
     elif payload == "DATE_CUSTOM":
         set_user_state(sender_id, "waiting_for_custom_date")
         messenger_api.send_text_message(

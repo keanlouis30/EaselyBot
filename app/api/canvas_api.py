@@ -7,6 +7,7 @@ import logging
 import requests
 from typing import Dict, List, Optional, Any
 from config.settings import CANVAS_BASE_URL, CANVAS_API_VERSION
+from app.utils.retry_helper import exponential_backoff_retry, is_retryable_http_error
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +19,15 @@ class CanvasAPIClient:
         self.base_url = CANVAS_BASE_URL
         self.api_version = CANVAS_API_VERSION
         
+    @exponential_backoff_retry(
+        retries=3,
+        initial_delay=1.0,
+        max_delay=10.0,
+        exceptions=(requests.exceptions.RequestException, requests.exceptions.Timeout)
+    )
     def _make_request(self, token: str, endpoint: str, method: str = 'GET', params: Dict = None) -> Optional[Any]:
         """
-        Make authenticated request to Canvas API
+        Make authenticated request to Canvas API with retry logic
         
         Args:
             token: Canvas access token
@@ -48,13 +55,19 @@ class CanvasAPIClient:
             
             if response.status_code == 200:
                 return response.json()
+            elif is_retryable_http_error(response.status_code):
+                # Raise exception to trigger retry for retryable errors
+                raise requests.exceptions.RequestException(
+                    f"Retryable Canvas API error: {response.status_code} - {response.text}"
+                )
             else:
-                logger.error(f"Canvas API error: {response.status_code} - {response.text}")
+                logger.error(f"Canvas API error (non-retryable): {response.status_code} - {response.text}")
                 return None
                 
         except requests.exceptions.RequestException as e:
-            logger.error(f"Canvas API request failed: {str(e)}")
-            return None
+            # Let the decorator handle retries for these exceptions
+            logger.warning(f"Canvas API request failed, will retry: {str(e)}")
+            raise
     
     def validate_token(self, token: str) -> Dict[str, Any]:
         """
@@ -191,12 +204,11 @@ class CanvasAPIClient:
             
             logger.info(f"Total assignments with due dates found: {len(assignments)}")
             
-            # Sort by due date and return limited results
+            # Sort by due date and return ALL assignments (no limit)
             assignments.sort(key=lambda x: x['due_date'] or '')
-            final_assignments = assignments[:limit]
             
-            logger.info(f"Returning {len(final_assignments)} assignments after limit")
-            return final_assignments
+            logger.info(f"Returning ALL {len(assignments)} assignments (no limit)")
+            return assignments
             
         except Exception as e:
             logger.error(f"Error fetching assignments: {str(e)}")
@@ -204,7 +216,7 @@ class CanvasAPIClient:
     
     def get_upcoming_assignments(self, token: str, days_ahead: int = 14) -> List[Dict[str, Any]]:
         """
-        Get assignments due in the next X days
+        Get assignments due in the next X days (FUTURE ONLY, not past)
         
         Args:
             token: Canvas access token
@@ -215,9 +227,11 @@ class CanvasAPIClient:
         """
         try:
             from datetime import datetime, timedelta, timezone
-            cutoff_date = datetime.now(timezone.utc) + timedelta(days=days_ahead)
+            now = datetime.now(timezone.utc)
+            cutoff_date = now + timedelta(days=days_ahead)
             
-            all_assignments = self.get_assignments(token, limit=50)
+            # Get ALL assignments, not just 50
+            all_assignments = self.get_assignments(token, limit=200)
             upcoming = []
             
             for assignment in all_assignments:
@@ -225,12 +239,13 @@ class CanvasAPIClient:
                     try:
                         # Parse Canvas datetime format
                         due_date = datetime.fromisoformat(assignment['due_date'].replace('Z', '+00:00'))
-                        if due_date <= cutoff_date:
+                        # ONLY include FUTURE assignments (due_date > now) and within cutoff
+                        if now <= due_date <= cutoff_date:
                             upcoming.append(assignment)
                     except (ValueError, AttributeError):
                         continue
             
-            return upcoming[:20]  # Limit to 20 most urgent
+            return upcoming  # Return ALL upcoming, no limit
             
         except Exception as e:
             logger.error(f"Error fetching upcoming assignments: {str(e)}")
@@ -254,15 +269,18 @@ def validate_canvas_token(token: str) -> Dict[str, Any]:
     return canvas_client.validate_token(token)
 
 
-def fetch_user_assignments(token: str, limit: int = 10) -> List[Dict[str, Any]]:
+def fetch_user_assignments(token: str, limit: int = 200) -> List[Dict[str, Any]]:
     """
     Convenience function to fetch user assignments
     
     Args:
         token: Canvas access token
-        limit: Maximum assignments to return
+        limit: Maximum assignments to return (default 200 for all)
         
     Returns:
         List of assignment dictionaries
     """
-    return canvas_client.get_upcoming_assignments(token, days_ahead=30)[:limit]
+    # Get assignments for the next 90 days to ensure we get all relevant ones
+    assignments = canvas_client.get_upcoming_assignments(token, days_ahead=90)
+    # Return all assignments, not truncated
+    return assignments
