@@ -316,8 +316,8 @@ def cache_canvas_assignments(facebook_id: str, assignments: List[Dict[str, Any]]
                 'course_name': assignment.get('course_name'),
                 'course_code': assignment.get('course_code'),
                 'description': assignment.get('description'),
-                'points_possible': assignment.get('points_possible'),
-                'html_url': assignment.get('html_url'),
+                'canvas_points_possible': assignment.get('points_possible'),
+                'canvas_html_url': assignment.get('html_url'),
                 'created_at': datetime.now(timezone.utc).isoformat(),
                 'updated_at': datetime.now(timezone.utc).isoformat()
             }
@@ -353,8 +353,8 @@ def get_cached_canvas_assignments(facebook_id: str) -> List[Dict[str, Any]]:
                 'course_code': task.get('course_code'),
                 'due_date': task.get('due_date'),
                 'description': task.get('description'),
-                'points_possible': task.get('points_possible'),
-                'html_url': task.get('html_url')
+                'points_possible': task.get('canvas_points_possible'),
+                'html_url': task.get('canvas_html_url')
             }
             assignments.append(assignment)
         
