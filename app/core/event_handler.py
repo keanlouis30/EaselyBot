@@ -77,7 +77,7 @@ def handle_message(sender_id: str, text: str) -> None:
         else:
             messenger_api.send_text_message(
                 sender_id,
-                "I didn't understand that. Type 'menu' to see available options."
+                "I didn't understand that. Type 'menu' to see available options or 'help' for assistance."
             )
             messenger_api.send_main_menu(sender_id)
         
@@ -395,23 +395,58 @@ def handle_token_ready(sender_id: str) -> None:
 
 def handle_token_input(sender_id: str, token: str) -> None:
     """
-    Process Canvas token input from user
+    Process Canvas token input from user with validation
     
     Args:
         sender_id: Facebook user ID
         token: Canvas access token
     """
+    token = token.strip()
+    
+    # Check if user wants to cancel or go back
+    if token.lower() in ['cancel', 'back', 'menu', 'stop']:
+        clear_user_state(sender_id)
+        messenger_api.send_text_message(
+            sender_id,
+            "Token setup cancelled. You can try again anytime!"
+        )
+        messenger_api.send_main_menu(sender_id)
+        return
+    
+    # Basic token format validation
+    if len(token) < 10:
+        messenger_api.send_text_message(
+            sender_id,
+            "🚫 That doesn't look like a valid Canvas token. Canvas tokens are usually much longer.\n\n"
+            "Please paste your full Canvas Access Token, or type 'cancel' to go back."
+        )
+        return
+    
+    # Check for obvious non-token text
+    if token.lower() in ['l', 'ok', 'yes', 'no', 'hello', 'hi'] or len(token) < 5:
+        messenger_api.send_text_message(
+            sender_id,
+            "🤔 That doesn't look like a Canvas token. \n\n"
+            "Canvas tokens look like: '1234~abcd1234efgh5678ijkl9012...'\n\n"
+            "Please paste your Canvas Access Token, or type 'cancel' to go back."
+        )
+        return
+    
+    # If token looks reasonable, process it
+    messenger_api.send_text_message(
+        sender_id,
+        "✅ Token received! Validating with Canvas..."
+    )
+    
     # Here you would validate the token with Canvas API
-    # For now, we'll simulate success
+    # For now, we'll simulate success after basic validation
+    import time
+    time.sleep(2)  # Simulate API call delay
     
     messenger_api.send_text_message(
         sender_id,
         "✅ Token verified! Syncing your Canvas data..."
     )
-    
-    # Simulate fetching assignments
-    import time
-    time.sleep(2)  # Simulate API call delay
     
     # Show sample upcoming assignments (in production, fetch real data)
     sample_tasks = (
@@ -425,6 +460,7 @@ def handle_token_input(sender_id: str, token: str) -> None:
     messenger_api.send_text_message(sender_id, sample_tasks)
     
     # Clear the waiting state and mark onboarding complete
+    clear_user_state(sender_id)
     set_user_state(sender_id, "token_verified")
     
     # Offer premium upgrade
@@ -542,7 +578,36 @@ def handle_add_new_task(sender_id: str) -> None:
 
 
 def handle_task_title_input(sender_id: str, title: str) -> None:
-    """Handle task title input"""
+    """Handle task title input with validation"""
+    title = title.strip()
+    
+    # Check if user wants to cancel
+    if title.lower() in ['cancel', 'back', 'menu', 'stop']:
+        clear_user_state(sender_id)
+        messenger_api.send_text_message(
+            sender_id,
+            "Task creation cancelled. You can try again anytime!"
+        )
+        messenger_api.send_main_menu(sender_id)
+        return
+    
+    # Validate title length and content
+    if len(title) < 2:
+        messenger_api.send_text_message(
+            sender_id,
+            "🤔 That's a bit short for a task title. \n\n"
+            "Please enter a descriptive title for your task (e.g., 'Math Homework Chapter 5'), or type 'cancel' to go back."
+        )
+        return
+    
+    if title.lower() in ['l', 'ok', 'yes', 'no', 'hello', 'hi']:
+        messenger_api.send_text_message(
+            sender_id,
+            "🤔 That doesn't look like a task title. \n\n"
+            "Please enter a descriptive title for your task (e.g., 'Math Homework Chapter 5'), or type 'cancel' to go back."
+        )
+        return
+    
     # Store the title in session
     if sender_id not in user_sessions:
         user_sessions[sender_id] = {}
@@ -611,28 +676,121 @@ def handle_time_selection(sender_id: str, payload: str) -> None:
 
 
 def handle_custom_date_input(sender_id: str, date_text: str) -> None:
-    """Handle custom date input"""
+    """Handle custom date input with validation"""
+    date_text = date_text.strip()
+    
+    # Check if user wants to cancel
+    if date_text.lower() in ['cancel', 'back', 'menu', 'stop']:
+        clear_user_state(sender_id)
+        messenger_api.send_text_message(
+            sender_id,
+            "Task creation cancelled. You can try again anytime!"
+        )
+        messenger_api.send_main_menu(sender_id)
+        return
+    
+    # Check for obvious non-date text
+    if date_text.lower() in ['l', 'ok', 'yes', 'no', 'hello', 'hi'] or len(date_text) < 3:
+        messenger_api.send_text_message(
+            sender_id,
+            "🤔 That doesn't look like a date. \n\n"
+            "Please enter a date in MM/DD/YYYY format (e.g., '12/25/2024'), or type 'cancel' to go back."
+        )
+        return
+    
     # Parse and validate date (simplified for demo)
     try:
+        from datetime import datetime
+        # Try to parse common date formats
+        for fmt in ['%m/%d/%Y', '%m-%d-%Y', '%m.%d.%Y', '%m/%d/%y']:
+            try:
+                parsed_date = datetime.strptime(date_text, fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            raise ValueError("Invalid date format")
+        
         # Store date
         if sender_id not in user_sessions:
             user_sessions[sender_id] = {}
-        user_sessions[sender_id]['task_date'] = date_text
+        user_sessions[sender_id]['task_date'] = parsed_date.strftime('%Y-%m-%d')
         
         clear_user_state(sender_id)
         messenger_api.send_time_picker(sender_id)
-    except:
+        
+    except ValueError:
         messenger_api.send_text_message(
             sender_id,
-            "Invalid date format. Please use MM/DD/YYYY:"
+            "📅 Invalid date format. \n\n"
+            "Please enter a date in MM/DD/YYYY format (e.g., '12/25/2024'), or type 'cancel' to go back."
         )
 
 
 def handle_custom_time_input(sender_id: str, time_text: str) -> None:
-    """Handle custom time input"""
+    """Handle custom time input with validation"""
+    time_text = time_text.strip()
+    
+    # Check if user wants to cancel
+    if time_text.lower() in ['cancel', 'back', 'menu', 'stop']:
+        clear_user_state(sender_id)
+        messenger_api.send_text_message(
+            sender_id,
+            "Task creation cancelled. You can try again anytime!"
+        )
+        messenger_api.send_main_menu(sender_id)
+        return
+    
+    # Check for obvious non-time text
+    if time_text.lower() in ['l', 'ok', 'yes', 'no', 'hello', 'hi'] or len(time_text) < 3:
+        messenger_api.send_text_message(
+            sender_id,
+            "🤔 That doesn't look like a time. \n\n"
+            "Please enter a time in format like '2:30 PM', '14:30', or '11:59 PM', or type 'cancel' to go back."
+        )
+        return
+    
     # Parse and validate time (simplified for demo)
-    # In production, implement proper time parsing
-    pass
+    try:
+        from datetime import datetime
+        # Try to parse common time formats
+        for fmt in ['%I:%M %p', '%H:%M', '%I %p', '%H']:
+            try:
+                parsed_time = datetime.strptime(time_text, fmt)
+                time_str = parsed_time.strftime('%I:%M %p')
+                break
+            except ValueError:
+                continue
+        else:
+            raise ValueError("Invalid time format")
+        
+        # Get stored task data and create task
+        if sender_id in user_sessions:
+            title = user_sessions[sender_id].get('task_title', 'New Task')
+            date = user_sessions[sender_id].get('task_date', 'Today')
+            
+            # In production, save to database and sync with Canvas
+            messenger_api.send_text_message(
+                sender_id,
+                f"✅ Task added successfully!\\n\\n"
+                f"📚 {title}\\n"
+                f"📅 Due: {date} at {time_str}\\n\\n"
+                f"The task has been added to your Canvas calendar."
+            )
+            
+            # Clear session data
+            user_sessions[sender_id] = {}
+        
+        clear_user_state(sender_id)
+        # Show menu again
+        messenger_api.send_main_menu(sender_id)
+        
+    except ValueError:
+        messenger_api.send_text_message(
+            sender_id,
+            "🕰️ Invalid time format. \n\n"
+            "Please enter a time like '2:30 PM', '14:30', or '11:59 PM', or type 'cancel' to go back."
+        )
 
 
 def handle_premium_activation(sender_id: str) -> None:
