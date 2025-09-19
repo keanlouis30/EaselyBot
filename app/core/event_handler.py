@@ -185,6 +185,13 @@ def handle_postback(sender_id: str, payload: str) -> None:
             # Handle "Get Started" button
             messenger_api.send_main_menu(sender_id)
         
+        # Premium Flow Handlers
+        elif payload == "SHOW_PREMIUM":
+            handle_show_premium(sender_id)
+        
+        elif payload == "SKIP_PREMIUM":
+            handle_skip_premium(sender_id)
+        
         else:
             logger.warning(f"Unknown payload: {payload}")
             messenger_api.send_main_menu(sender_id)
@@ -459,6 +466,17 @@ def handle_token_input(sender_id: str, token: str) -> None:
     
     messenger_api.send_text_message(sender_id, sample_tasks)
     
+    # Store the validated token in database (encrypt in production)
+    try:
+        from app.database.supabase_client import update_user
+        update_user(sender_id, {
+            'canvas_token': token,  # In production, encrypt this
+            'last_canvas_sync': 'now()',
+            'canvas_sync_enabled': True
+        })
+    except Exception as e:
+        logger.error(f"Error storing Canvas token: {str(e)}")
+    
     # Clear the waiting state and mark onboarding complete
     clear_user_state(sender_id)
     set_user_state(sender_id, "token_verified", "token_validation_success")
@@ -470,15 +488,23 @@ def handle_token_input(sender_id: str, token: str) -> None:
     except Exception as e:
         logger.debug(f"Error logging analytics: {e}")
     
+    # Show success message and offer premium upgrade
+    messenger_api.send_text_message(
+        sender_id,
+        "🎉 Awesome! Your Canvas integration is complete!\n\n"
+        "I can now help you stay on top of your assignments and deadlines. "
+        "Would you like to see what Easely Premium offers?"
+    )
+    
     # Offer premium upgrade
     quick_replies = [
-        messenger_api.create_quick_reply("Learn More", "SHOW_PREMIUM"),
-        messenger_api.create_quick_reply("Maybe Later", "SKIP_PREMIUM")
+        messenger_api.create_quick_reply("💎 Learn More", "SHOW_PREMIUM"),
+        messenger_api.create_quick_reply("📚 Start Using Free", "SKIP_PREMIUM")
     ]
     
     messenger_api.send_quick_replies(
         sender_id,
-        "Would you like to upgrade to Easely Premium for advanced features like multiple reminders and AI-powered study planning?",
+        "Choose your next step:",
         quick_replies
     )
 
@@ -813,6 +839,72 @@ def handle_premium_activation(sender_id: str) -> None:
         "• Weekly digest reports\\n\\n"
         "Thank you for upgrading!"
     )
+    messenger_api.send_main_menu(sender_id)
+
+
+def handle_show_premium(sender_id: str) -> None:
+    """Show premium features and pricing"""
+    premium_text = (
+        "💎 Easely Premium Features\n\n"
+        "Upgrade for advanced features:\n\n"
+        "🔔 **Enhanced Reminders**\n"
+        "• Multiple alerts (1w, 3d, 1d, 8h, 2h, 1h)\n"
+        "• Smart notification timing\n\n"
+        "📝 **Unlimited Tasks**\n"
+        "• Add as many custom tasks as you need\n"
+        "• Full Canvas integration\n\n"
+        "🤖 **AI Study Planning**\n"
+        "• Personalized study schedules\n"
+        "• Workload optimization\n\n"
+        "📊 **Analytics & Reports**\n"
+        "• Weekly progress summaries\n"
+        "• Performance insights\n\n"
+        "💰 **Only $4.99/month**\n"
+        "Cancel anytime. 7-day free trial!"
+    )
+    
+    buttons = [
+        messenger_api.create_url_button(
+            "💎 Upgrade Now",
+            "https://ko-fi.com/easely/shop"
+        )
+    ]
+    
+    messenger_api.send_button_template(sender_id, premium_text, buttons)
+    
+    # After showing premium info, give option to continue
+    quick_replies = [
+        messenger_api.create_quick_reply("🏠 Main Menu", "MAIN_MENU"),
+        messenger_api.create_quick_reply("⚙️ Settings", "SHOW_SETTINGS")
+    ]
+    
+    messenger_api.send_quick_replies(
+        sender_id,
+        "Ready to explore your tasks?",
+        quick_replies
+    )
+
+
+def handle_skip_premium(sender_id: str) -> None:
+    """Handle user skipping premium upgrade"""
+    # Mark onboarding as complete in database
+    try:
+        from app.database.supabase_client import update_user
+        update_user(sender_id, {'onboarding_completed': True})
+        logger.info(f"Marked onboarding complete for user {sender_id}")
+    except Exception as e:
+        logger.error(f"Error updating onboarding status: {str(e)}")
+    
+    # Welcome message and show main menu
+    messenger_api.send_text_message(
+        sender_id,
+        "🎉 Perfect! You're all set up!\n\n"
+        "I'm ready to help you stay organized with your Canvas assignments. "
+        "You can always upgrade to Premium later for advanced features.\n\n"
+        "Let's get started! 📚"
+    )
+    
+    # Show main menu
     messenger_api.send_main_menu(sender_id)
 
 
