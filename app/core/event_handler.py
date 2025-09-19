@@ -36,8 +36,17 @@ def handle_message(sender_id: str, text: str) -> None:
             # Update last seen for existing users
             update_user_last_seen(sender_id)
         
-        # Check for greetings and menu requests - or ANY message from new users
-        if text_lower in ['hi', 'hello', 'hey', 'menu', 'help', 'start'] or not user:
+        # Check for greetings and menu requests - but only if not in active flow
+        current_state = None
+        try:
+            current_state = get_user_session(sender_id, 'conversation_state')
+        except:
+            pass
+        
+        # Don't interrupt active conversation flows
+        in_active_flow = current_state in ['waiting_for_token', 'waiting_for_task_title', 'waiting_for_custom_date', 'waiting_for_custom_time']
+        
+        if (text_lower in ['hi', 'hello', 'hey', 'menu', 'help', 'start'] or not user) and not in_active_flow:
             # Check if user is new or returning
             if is_new_user(sender_id):
                 # Send onboarding flow for new users
@@ -918,16 +927,28 @@ def is_new_user(sender_id: str) -> bool:
         if not user:
             return True  # User doesn't exist in database - they are new
         
-        # Check if user has completed onboarding by checking their onboarding status
+        # Check multiple indicators of onboarding completion
         onboarding_complete = user.get('onboarding_completed', False)
-        if not onboarding_complete:
-            return True  # User exists but hasn't completed onboarding
+        has_canvas_token = user.get('canvas_token') is not None and user.get('canvas_token') != ''
         
-        # User exists and has completed onboarding
-        return False
+        # If user has completed onboarding OR has a canvas token, they're not new
+        if onboarding_complete or has_canvas_token:
+            return False
+        
+        # User exists but hasn't completed onboarding and has no token
+        return True
         
     except Exception as e:
-        logger.error(f"Error checking user status for {sender_id}: {str(e)}")
+        logger.debug(f"Error checking user status for {sender_id}: {str(e)}")
+        # If there's a database error, check if we have session info
+        try:
+            current_state = get_user_session(sender_id, 'conversation_state')
+            # If user has a conversation state, they're probably not completely new
+            if current_state in ['token_verified', 'onboarding_complete']:
+                return False
+        except:
+            pass
+        
         # Default to treating as new user if we can't determine status
         return True
 
