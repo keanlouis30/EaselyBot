@@ -169,7 +169,9 @@ def update_user(facebook_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
 def update_user_last_seen(facebook_id: str):
     """Update user's last seen timestamp"""
     try:
-        supabase_client.client.table('users').update({'last_seen': 'now()'}).eq('facebook_id', facebook_id).execute()
+        from datetime import datetime, timezone
+        current_time = datetime.now(timezone.utc).isoformat()
+        supabase_client.client.table('users').update({'last_seen': current_time}).eq('facebook_id', facebook_id).execute()
     except Exception as e:
         logger.error(f"Error updating last seen for user {facebook_id}: {str(e)}")
 
@@ -177,11 +179,14 @@ def update_user_last_seen(facebook_id: str):
 def set_user_session(facebook_id: str, session_key: str, session_value: str, expires_hours: int = 24):
     """Set user session data"""
     try:
+        from datetime import datetime, timezone, timedelta
+        
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=expires_hours)
         session_data = {
             'facebook_id': facebook_id,
             'session_key': session_key,
             'session_value': session_value,
-            'expires_at': f'now() + interval \'{expires_hours} hours\''
+            'expires_at': expires_at.isoformat()
         }
         
         # Upsert session data
@@ -199,9 +204,12 @@ def set_user_session(facebook_id: str, session_key: str, session_value: str, exp
 def get_user_session(facebook_id: str, session_key: str) -> Optional[str]:
     """Get user session data"""
     try:
+        from datetime import datetime, timezone
+        current_time = datetime.now(timezone.utc).isoformat()
+        
         response = supabase_client.client.table('user_sessions').select('session_value').eq(
             'facebook_id', facebook_id
-        ).eq('session_key', session_key).gt('expires_at', 'now()').single().execute()
+        ).eq('session_key', session_key).gt('expires_at', current_time).single().execute()
         
         return response.data['session_value'] if response.data else None
     
@@ -225,7 +233,9 @@ def clear_user_session(facebook_id: str, session_key: str = None):
 def cleanup_expired_sessions():
     """Clean up expired sessions"""
     try:
-        supabase_client.client.table('user_sessions').delete().lt('expires_at', 'now()').execute()
+        from datetime import datetime, timezone
+        current_time = datetime.now(timezone.utc).isoformat()
+        supabase_client.client.table('user_sessions').delete().lt('expires_at', current_time).execute()
         logger.info("Expired sessions cleaned up")
     except Exception as e:
         logger.error(f"Error cleaning up expired sessions: {str(e)}")
@@ -287,12 +297,14 @@ def delete_task(task_id: int):
 def log_canvas_sync(facebook_id: str, sync_type: str, status: str, assignments_fetched: int = 0, error_message: str = None):
     """Log Canvas synchronization attempt"""
     try:
+        from datetime import datetime, timezone
+        
         sync_data = {
             'facebook_id': facebook_id,
             'sync_type': sync_type,
             'status': status,
             'assignments_fetched': assignments_fetched,
-            'sync_completed_at': 'now()'
+            'sync_completed_at': datetime.now(timezone.utc).isoformat()
         }
         
         if error_message:
@@ -342,12 +354,14 @@ def update_transaction_status(transaction_id: str, status: str, completed_at: st
 def log_user_message(facebook_id: str, message_type: str, message_content: str, event_data: Dict = None, response_action: str = None):
     """Log incoming user messages and bot responses"""
     try:
+        from datetime import datetime, timezone
+        
         log_data = {
             'facebook_id': facebook_id,
             'message_type': message_type,  # 'text', 'postback', 'quick_reply'
             'message_content': message_content,
             'response_action': response_action,  # what action the bot took
-            'timestamp': 'now()'
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }
         
         if event_data:
@@ -361,12 +375,14 @@ def log_user_message(facebook_id: str, message_type: str, message_content: str, 
 def log_webhook_event(event_type: str, sender_id: str, event_data: Dict, processing_status: str, error_message: str = None):
     """Log webhook events for debugging and analytics"""
     try:
+        from datetime import datetime, timezone
+        
         log_data = {
             'event_type': event_type,
             'sender_id': sender_id,
             'event_data': event_data,
             'processing_status': processing_status,  # 'success', 'error', 'warning'
-            'timestamp': 'now()'
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }
         
         if error_message:
@@ -380,12 +396,14 @@ def log_webhook_event(event_type: str, sender_id: str, event_data: Dict, process
 def log_conversation_state(facebook_id: str, previous_state: str, new_state: str, trigger_action: str):
     """Log conversation state transitions for analytics"""
     try:
+        from datetime import datetime, timezone
+        
         log_data = {
             'facebook_id': facebook_id,
             'previous_state': previous_state,
             'new_state': new_state,
             'trigger_action': trigger_action,
-            'timestamp': 'now()'
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }
         
         supabase_client.client.table('conversation_states').insert(log_data).execute()
@@ -396,11 +414,13 @@ def log_conversation_state(facebook_id: str, previous_state: str, new_state: str
 def log_bot_action(facebook_id: str, action_type: str, action_details: Dict = None, success: bool = True, error_message: str = None):
     """Log bot actions for analytics and debugging"""
     try:
+        from datetime import datetime, timezone
+        
         log_data = {
             'facebook_id': facebook_id,
             'action_type': action_type,  # 'send_message', 'api_call', 'task_created', etc.
             'success': success,
-            'timestamp': 'now()'
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }
         
         if action_details:
@@ -417,10 +437,12 @@ def log_bot_action(facebook_id: str, action_type: str, action_details: Dict = No
 def log_user_analytics(facebook_id: str, event_type: str, event_data: Dict = None):
     """Log user behavior for analytics"""
     try:
+        from datetime import datetime, timezone
+        
         log_data = {
             'facebook_id': facebook_id,
             'event_type': event_type,  # 'session_start', 'token_validated', 'task_created', 'premium_upgraded', etc.
-            'timestamp': 'now()'
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }
         
         if event_data:

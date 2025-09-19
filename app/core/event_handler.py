@@ -454,35 +454,75 @@ def handle_token_input(sender_id: str, token: str) -> None:
         "✅ Token received! Validating with Canvas..."
     )
     
-    # Here you would validate the token with Canvas API
-    # For now, we'll simulate success after basic validation
-    import time
-    time.sleep(2)  # Simulate API call delay
-    
-    messenger_api.send_text_message(
-        sender_id,
-        "✅ Token verified! Syncing your Canvas data..."
-    )
-    
-    # Show sample upcoming assignments (in production, fetch real data)
-    sample_tasks = (
-        "📚 Your upcoming assignments:\\n\\n"
-        "1. Math Homework - Due Tomorrow\\n"
-        "2. Essay Draft - Due in 3 days\\n"
-        "3. Lab Report - Due next week\\n\\n"
-        "I'll remind you before each deadline!"
-    )
-    
-    messenger_api.send_text_message(sender_id, sample_tasks)
-    
-    # Store the validated token in database (encrypt in production)
+    # Validate token with real Canvas API
     try:
-        from app.database.supabase_client import update_user
-        update_user(sender_id, {
-            'canvas_token': token,  # In production, encrypt this
-            'last_canvas_sync': 'now()',
-            'canvas_sync_enabled': True
-        })
+        from app.api.canvas_api import validate_canvas_token, fetch_user_assignments
+        
+        # Validate the token
+        validation_result = validate_canvas_token(token)
+        
+        if not validation_result['valid']:
+            # Token validation failed
+            error_msg = validation_result.get('error_message', 'Unknown error')
+            messenger_api.send_text_message(
+                sender_id,
+                f"❌ Token validation failed: {error_msg}\n\n"
+                "Please check your Canvas token and try again, or type 'cancel' to go back."
+            )
+            return
+        
+        # Token is valid, get user info
+        user_info = validation_result.get('user_info', {})
+        user_name = user_info.get('name', 'there')
+        
+        messenger_api.send_text_message(
+            sender_id,
+            f"✅ Token verified! Welcome {user_name}! Syncing your Canvas data..."
+        )
+        
+        # Fetch real assignments from Canvas
+        assignments = fetch_user_assignments(token, limit=5)
+        
+        if assignments:
+            # Format and show real assignments
+            tasks_text = "📚 Your upcoming assignments:\n\n"
+            for i, assignment in enumerate(assignments[:3], 1):
+                from datetime import datetime
+                try:
+                    due_date = datetime.fromisoformat(assignment['due_date'].replace('Z', '+00:00'))
+                    due_str = due_date.strftime('%m/%d at %I:%M %p')
+                except:
+                    due_str = "Date TBD"
+                
+                tasks_text += f"{i}. {assignment['title']} ({assignment['course_code']}) - Due {due_str}\n"
+            
+            tasks_text += "\nI'll remind you before each deadline!"
+            messenger_api.send_text_message(sender_id, tasks_text)
+        else:
+            messenger_api.send_text_message(
+                sender_id,
+                "✅ Canvas connected successfully! I don't see any upcoming assignments right now, "
+                "but I'll notify you when new assignments are posted."
+            )
+        
+    except Exception as api_error:
+        logger.error(f"Canvas API validation error: {str(api_error)}")
+        messenger_api.send_text_message(
+            sender_id,
+            "⚠️ There was an issue connecting to Canvas. Your token appears valid, but I couldn't "
+            "fetch your assignments right now. Don't worry - I'll keep trying in the background!"
+        )
+    
+        # Store the validated token in database (encrypt in production)
+        try:
+            from app.database.supabase_client import update_user
+            from datetime import datetime, timezone
+            
+            update_user(sender_id, {
+                'canvas_token': token,  # In production, encrypt this
+                'last_canvas_sync': datetime.now(timezone.utc).isoformat(),
+                'canvas_sync_enabled': True
+            })
     except Exception as e:
         logger.error(f"Error storing Canvas token: {str(e)}")
     

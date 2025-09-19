@@ -1,0 +1,247 @@
+"""
+Canvas API Client for EaselyBot
+Handles Canvas LMS API integration including token validation and assignment fetching
+"""
+
+import logging
+import requests
+from typing import Dict, List, Optional, Any
+from config.settings import CANVAS_BASE_URL, CANVAS_API_VERSION
+
+logger = logging.getLogger(__name__)
+
+
+class CanvasAPIClient:
+    """Canvas LMS API client for token validation and data fetching"""
+    
+    def __init__(self):
+        self.base_url = CANVAS_BASE_URL
+        self.api_version = CANVAS_API_VERSION
+        
+    def _make_request(self, token: str, endpoint: str, method: str = 'GET', params: Dict = None) -> Optional[Any]:
+        """
+        Make authenticated request to Canvas API
+        
+        Args:
+            token: Canvas access token
+            endpoint: API endpoint (without /api/v1 prefix)
+            method: HTTP method
+            params: Query parameters
+            
+        Returns:
+            Response data or None if failed
+        """
+        try:
+            url = f"{self.base_url}/api/{self.api_version}/{endpoint}"
+            headers = {
+                'Authorization': f'Bearer {token}',
+                'Content-Type': 'application/json'
+            }
+            
+            response = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                params=params or {},
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.error(f"Canvas API error: {response.status_code} - {response.text}")
+                return None
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Canvas API request failed: {str(e)}")
+            return None
+    
+    def validate_token(self, token: str) -> Dict[str, Any]:
+        """
+        Validate Canvas access token by fetching user profile
+        
+        Args:
+            token: Canvas access token to validate
+            
+        Returns:
+            Dict with validation result:
+            {
+                'valid': bool,
+                'user_info': dict or None,
+                'error_message': str or None
+            }
+        """
+        try:
+            # Test token by getting user profile
+            user_data = self._make_request(token, 'users/self')
+            
+            if user_data:
+                return {
+                    'valid': True,
+                    'user_info': {
+                        'id': user_data.get('id'),
+                        'name': user_data.get('name'),
+                        'email': user_data.get('email'),
+                        'login_id': user_data.get('login_id')
+                    },
+                    'error_message': None
+                }
+            else:
+                return {
+                    'valid': False,
+                    'user_info': None,
+                    'error_message': 'Invalid token or Canvas server error'
+                }
+                
+        except Exception as e:
+            logger.error(f"Token validation error: {str(e)}")
+            return {
+                'valid': False,
+                'user_info': None,
+                'error_message': f'Validation error: {str(e)}'
+            }
+    
+    def get_user_courses(self, token: str) -> List[Dict[str, Any]]:
+        """
+        Get user's active courses
+        
+        Args:
+            token: Canvas access token
+            
+        Returns:
+            List of course dictionaries
+        """
+        try:
+            courses = self._make_request(token, 'courses', params={
+                'enrollment_state': 'active',
+                'per_page': 100
+            })
+            
+            if courses:
+                return [{
+                    'id': course.get('id'),
+                    'name': course.get('name'),
+                    'course_code': course.get('course_code'),
+                    'term': course.get('term', {}).get('name', 'Unknown')
+                } for course in courses]
+            
+            return []
+            
+        except Exception as e:
+            logger.error(f"Error fetching courses: {str(e)}")
+            return []
+    
+    def get_assignments(self, token: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Get upcoming assignments across all courses
+        
+        Args:
+            token: Canvas access token
+            limit: Maximum number of assignments to return
+            
+        Returns:
+            List of assignment dictionaries
+        """
+        try:
+            # First get user's courses
+            courses = self.get_user_courses(token)
+            assignments = []
+            
+            for course in courses[:10]:  # Limit to first 10 courses to avoid rate limits
+                course_assignments = self._make_request(
+                    token, 
+                    f'courses/{course["id"]}/assignments',
+                    params={
+                        'per_page': 50,
+                        'order_by': 'due_at'
+                    }
+                )
+                
+                if course_assignments:
+                    for assignment in course_assignments:
+                        # Only include assignments with due dates
+                        if assignment.get('due_at'):
+                            assignments.append({
+                                'id': assignment.get('id'),
+                                'title': assignment.get('name'),
+                                'course_name': course['name'],
+                                'course_code': course['course_code'],
+                                'due_date': assignment.get('due_at'),
+                                'description': assignment.get('description', ''),
+                                'points_possible': assignment.get('points_possible'),
+                                'submission_types': assignment.get('submission_types', []),
+                                'html_url': assignment.get('html_url')
+                            })
+            
+            # Sort by due date and return limited results
+            assignments.sort(key=lambda x: x['due_date'] or '')
+            return assignments[:limit]
+            
+        except Exception as e:
+            logger.error(f"Error fetching assignments: {str(e)}")
+            return []
+    
+    def get_upcoming_assignments(self, token: str, days_ahead: int = 14) -> List[Dict[str, Any]]:
+        """
+        Get assignments due in the next X days
+        
+        Args:
+            token: Canvas access token
+            days_ahead: Number of days to look ahead
+            
+        Returns:
+            List of upcoming assignment dictionaries
+        """
+        try:
+            from datetime import datetime, timedelta
+            cutoff_date = datetime.now() + timedelta(days=days_ahead)
+            
+            all_assignments = self.get_assignments(token, limit=50)
+            upcoming = []
+            
+            for assignment in all_assignments:
+                if assignment['due_date']:
+                    try:
+                        # Parse Canvas datetime format
+                        due_date = datetime.fromisoformat(assignment['due_date'].replace('Z', '+00:00'))
+                        if due_date <= cutoff_date:
+                            upcoming.append(assignment)
+                    except (ValueError, AttributeError):
+                        continue
+            
+            return upcoming[:20]  # Limit to 20 most urgent
+            
+        except Exception as e:
+            logger.error(f"Error fetching upcoming assignments: {str(e)}")
+            return []
+
+
+# Global Canvas API client instance
+canvas_client = CanvasAPIClient()
+
+
+def validate_canvas_token(token: str) -> Dict[str, Any]:
+    """
+    Convenience function to validate a Canvas token
+    
+    Args:
+        token: Canvas access token
+        
+    Returns:
+        Validation result dictionary
+    """
+    return canvas_client.validate_token(token)
+
+
+def fetch_user_assignments(token: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """
+    Convenience function to fetch user assignments
+    
+    Args:
+        token: Canvas access token
+        limit: Maximum assignments to return
+        
+    Returns:
+        List of assignment dictionaries
+    """
+    return canvas_client.get_upcoming_assignments(token, days_ahead=30)[:limit]
