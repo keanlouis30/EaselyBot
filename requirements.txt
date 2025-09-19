@@ -16,7 +16,7 @@ gunicorn==21.2.0
 
 # Database (Supabase)
 supabase==2.3.4
-postgrest-py==0.13.2
+postgrest-py==0.10.6
 
 # Development Dependencies (uncomment for development)
 # pytest==7.4.3
