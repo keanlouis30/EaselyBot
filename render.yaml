@@ -14,5 +14,7 @@ services:
         value: production
       - key: DEBUG
         value: false
+      - key: PORT
+        value: 10000
     # Auto-deploy from main branch
     autoDeploy: true
