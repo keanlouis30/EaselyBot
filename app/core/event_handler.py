@@ -204,6 +204,9 @@ def handle_postback(sender_id: str, payload: str) -> None:
         elif payload == "SKIP_PREMIUM":
             handle_skip_premium(sender_id)
         
+        elif payload == "SYNC_CANVAS":
+            handle_sync_canvas(sender_id)
+        
         else:
             logger.warning(f"Unknown payload: {payload}")
             messenger_api.send_main_menu(sender_id)
@@ -1401,3 +1404,74 @@ def handle_show_about(sender_id: str) -> None:
     ]
     
     messenger_api.send_quick_replies(sender_id, about_text, quick_replies)
+
+
+def handle_sync_canvas(sender_id: str) -> None:
+    """Handle manual Canvas synchronization"""
+    try:
+        # Get user's Canvas token
+        token = get_user_canvas_token(sender_id)
+        if not token:
+            messenger_api.send_text_message(
+                sender_id,
+                "⚠️ I need your Canvas access token to sync your assignments. Please set up Canvas integration first."
+            )
+            messenger_api.send_quick_replies(
+                sender_id,
+                "Would you like to set up Canvas now?",
+                [
+                    messenger_api.create_quick_reply("📖 Setup Guide", "TOKEN_TUTORIAL"),
+                    messenger_api.create_quick_reply("🏠 Main Menu", "MAIN_MENU")
+                ]
+            )
+            return
+        
+        # Show typing indicator and sync message
+        messenger_api.send_typing_indicator(sender_id, "typing_on")
+        messenger_api.send_text_message(
+            sender_id,
+            "🔄 Syncing with Canvas... This may take a few seconds."
+        )
+        
+        # Force refresh from Canvas API
+        from app.database.supabase_client import sync_canvas_assignments
+        assignments = sync_canvas_assignments(sender_id, token, force_refresh=True)
+        
+        if assignments:
+            messenger_api.send_text_message(
+                sender_id,
+                f"✅ Canvas sync complete! Found {len(assignments)} assignments with due dates.\n\n"
+                "Your tasks are now up to date. What would you like to do next?"
+            )
+        else:
+            messenger_api.send_text_message(
+                sender_id,
+                "✅ Canvas sync complete! No assignments with due dates found.\n\n"
+                "This could mean:\n"
+                "• You have no upcoming assignments\n"
+                "• Your assignments don't have due dates set\n"
+                "• Your Canvas courses aren't active"
+            )
+        
+        # Show quick actions after sync
+        quick_replies = [
+            messenger_api.create_quick_reply("📚 View Tasks", "GET_TASKS_ALL"),
+            messenger_api.create_quick_reply("🔥 Due Today", "GET_TASKS_TODAY"),
+            messenger_api.create_quick_reply("🏠 Main Menu", "MAIN_MENU")
+        ]
+        
+        messenger_api.send_quick_replies(
+            sender_id,
+            "What would you like to do next?",
+            quick_replies
+        )
+        
+    except Exception as e:
+        logger.error(f"Error syncing Canvas for user {sender_id}: {str(e)}")
+        messenger_api.send_text_message(
+            sender_id,
+            "❌ Sorry, there was an issue syncing with Canvas. Please try again later or contact support."
+        )
+        messenger_api.send_main_menu(sender_id)
+    finally:
+        messenger_api.send_typing_indicator(sender_id, "typing_off")

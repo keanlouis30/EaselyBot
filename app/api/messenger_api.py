@@ -165,35 +165,19 @@ def setup_persistent_menu() -> bool:
                     "composer_input_disabled": False,
                     "call_to_actions": [
                         {
-                            "title": "🏠 Main Menu",
+                            "title": "📚 My Tasks",
                             "type": "postback",
                             "payload": "MAIN_MENU"
+                        },
+                        {
+                            "title": "🔗 Canvas Setup",
+                            "type": "postback",
+                            "payload": "TOKEN_TUTORIAL"
                         },
                         {
                             "title": "❓ Help & Support",
                             "type": "postback",
                             "payload": "SHOW_HELP"
-                        },
-                        {
-                            "title": "More Options",
-                            "type": "nested",
-                            "call_to_actions": [
-                                {
-                                    "title": "⚙️ Settings",
-                                    "type": "postback",
-                                    "payload": "SHOW_SETTINGS"
-                                },
-                                {
-                                    "title": "ℹ️ About Easely",
-                                    "type": "postback",
-                                    "payload": "SHOW_ABOUT"
-                                },
-                                {
-                                    "title": "🔗 Canvas Setup",
-                                    "type": "postback",
-                                    "payload": "TOKEN_TUTORIAL"
-                                }
-                            ]
                         }
                     ]
                 }
@@ -203,6 +187,12 @@ def setup_persistent_menu() -> bool:
         params = {"access_token": PAGE_ACCESS_TOKEN}
         
         response = requests.post(url, json=persistent_menu, params=params)
+        
+        if response.status_code != 200:
+            logger.error(f"Facebook API error: {response.status_code}")
+            logger.error(f"Response: {response.text}")
+            logger.error(f"Payload sent: {persistent_menu}")
+        
         response.raise_for_status()
         
         logger.info("Persistent menu set up successfully")
@@ -303,6 +293,80 @@ def setup_bot_profile() -> bool:
         return False
 
 
+def send_typing_indicator(recipient_id: str, typing_on_off: str) -> bool:
+    """
+    Send typing indicator to show bot is processing
+    
+    Args:
+        recipient_id: Facebook user ID
+        typing_on_off: "typing_on" or "typing_off"
+    
+    Returns:
+        bool: True if indicator sent successfully
+    """
+    try:
+        url = f"{GRAPH_API_URL}/me/messages"
+        
+        payload = {
+            "recipient": {"id": recipient_id},
+            "sender_action": typing_on_off
+        }
+        
+        params = {"access_token": PAGE_ACCESS_TOKEN}
+        
+        response = requests.post(url, json=payload, params=params)
+        response.raise_for_status()
+        
+        return True
+        
+    except requests.RequestException as e:
+        logger.error(f"Failed to send typing indicator to {recipient_id}: {str(e)}")
+        return False
+
+
+def create_url_button(title: str, url: str) -> Dict[str, str]:
+    """
+    Create a URL button for button templates
+    
+    Args:
+        title: Button text
+        url: URL to open
+    
+    Returns:
+        dict: URL button object
+    """
+    return {
+        "type": "web_url",
+        "title": title,
+        "url": url
+    }
+
+
+def send_button_template(recipient_id: str, text: str, buttons: List[Dict]) -> bool:
+    """
+    Send a message with button template
+    
+    Args:
+        recipient_id: Facebook user ID
+        text: Main message text
+        buttons: List of button objects
+    
+    Returns:
+        bool: True if message sent successfully
+    """
+    message_data = {
+        "attachment": {
+            "type": "template",
+            "payload": {
+                "template_type": "button",
+                "text": text,
+                "buttons": buttons
+            }
+        }
+    }
+    return send_message(recipient_id, message_data)
+
+
 # Keep backward compatibility
 def send_task_menu(recipient_id: str) -> bool:
     """Backward compatibility wrapper"""
@@ -338,6 +402,108 @@ def send_privacy_policy_consent(recipient_id: str) -> bool:
     ]
     
     return send_quick_replies(recipient_id, text, quick_replies)
+
+
+def send_final_consent(recipient_id: str) -> bool:
+    """
+    Send the final consent request - last step before Canvas setup
+    
+    Args:
+        recipient_id: Facebook user ID
+    
+    Returns:
+        bool: True if message sent successfully
+    """
+    text = (
+        "✅ Excellent! You've accepted both our Privacy Policy and Terms of Use.\n\n"
+        "🚀 You're all set to start using Easely! I'm ready to help you manage your Canvas assignments and deadlines.\n\n"
+        "Do you consent to proceed with setting up your Canvas integration?"
+    )
+    
+    quick_replies = [
+        create_quick_reply("🎯 Let's Go!", "FINAL_CONSENT_AGREE"),
+        create_quick_reply("❌ Not Now", "FINAL_CONSENT_DECLINE")
+    ]
+    
+    return send_quick_replies(recipient_id, text, quick_replies)
+
+
+def send_canvas_token_request(recipient_id: str) -> bool:
+    """
+    Send Canvas token setup request with options
+    
+    Args:
+        recipient_id: Facebook user ID
+    
+    Returns:
+        bool: True if message sent successfully
+    """
+    text = (
+        "🔗 Great! Now I need to connect to your Canvas account to fetch your assignments.\n\n"
+        "I'll need your Canvas Access Token - a secure way to access your Canvas data without storing your password.\n\n"
+        "Do you know how to generate a Canvas Access Token?"
+    )
+    
+    quick_replies = [
+        create_quick_reply("✅ I Know How", "TOKEN_KNOW_HOW"),
+        create_quick_reply("❓ Need Help", "TOKEN_NEED_HELP")
+    ]
+    
+    return send_quick_replies(recipient_id, text, quick_replies)
+
+
+def send_video_file(recipient_id: str, video_path: str) -> bool:
+    """
+    Send a video file to the user
+    
+    Args:
+        recipient_id: Facebook user ID
+        video_path: Path to video file
+    
+    Returns:
+        bool: True if video sent successfully
+    """
+    try:
+        import os
+        if not os.path.exists(video_path):
+            logger.error(f"Video file not found: {video_path}")
+            send_text_message(
+                recipient_id,
+                "📹 I have a video tutorial for you, but the video file is currently unavailable. "
+                "Please check the written instructions above instead."
+            )
+            return False
+        
+        url = f"{GRAPH_API_URL}/me/messages"
+        
+        # Upload video as attachment
+        with open(video_path, 'rb') as video_file:
+            files = {
+                'filedata': ('video.mp4', video_file, 'video/mp4')
+            }
+            
+            data = {
+                'recipient': f'{{"id":"{recipient_id}"}}',
+                'message': '{"attachment":{"type":"video", "payload":{"is_reusable":true}}}'
+            }
+            
+            params = {'access_token': PAGE_ACCESS_TOKEN}
+            
+            response = requests.post(url, data=data, files=files, params=params)
+            response.raise_for_status()
+            
+            logger.info(f"Video sent successfully to {recipient_id}")
+            return True
+            
+    except Exception as e:
+        logger.error(f"Failed to send video to {recipient_id}: {str(e)}")
+        # Fallback to text message
+        send_text_message(
+            recipient_id,
+            "📹 I have a video tutorial for you, but there was an issue sending it. "
+            "Please follow the written instructions provided instead."
+        )
+        return False
 
 
 def send_privacy_agreement_option(recipient_id: str) -> bool:
