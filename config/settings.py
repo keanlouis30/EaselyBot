@@ -15,7 +15,7 @@ VERIFY_TOKEN = os.getenv('VERIFY_TOKEN', 'easely_webhook_verify_token_2024')
 GRAPH_API_URL = os.getenv('GRAPH_API_URL', 'https://graph.facebook.com/v17.0')
 
 # Canvas API Configuration
-CANVAS_BASE_URL = os.getenv('CANVAS_BASE_URL', 'https://canvas.instructure.com')
+CANVAS_BASE_URL = os.getenv('CANVAS_BASE_URL', 'https://dlsu.instructure.com')
 CANVAS_API_VERSION = os.getenv('CANVAS_API_VERSION', 'v1')
 
 # Database Configuration (Supabase)

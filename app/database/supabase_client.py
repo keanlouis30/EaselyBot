@@ -385,19 +385,25 @@ def is_canvas_cache_fresh(facebook_id: str, max_age_hours: int = 2) -> bool:
 def sync_canvas_assignments(facebook_id: str, token: str, force_refresh: bool = False) -> List[Dict[str, Any]]:
     """Sync Canvas assignments with database cache"""
     try:
+        logger.info(f"Starting Canvas sync for user {facebook_id} (force_refresh={force_refresh})")
+        
         # Check if cache is fresh and we don't need to refresh
         if not force_refresh and is_canvas_cache_fresh(facebook_id):
             logger.info(f"Using cached Canvas assignments for user {facebook_id}")
-            return get_cached_canvas_assignments(facebook_id)
+            cached_assignments = get_cached_canvas_assignments(facebook_id)
+            logger.info(f"Retrieved {len(cached_assignments)} cached assignments")
+            return cached_assignments
         
         # Fetch fresh data from Canvas API
         logger.info(f"Fetching fresh Canvas assignments for user {facebook_id}")
         from app.api.canvas_api import fetch_user_assignments
         
         assignments = fetch_user_assignments(token, limit=100)
+        logger.info(f"Canvas API returned {len(assignments) if assignments else 0} assignments")
         
         if assignments:
             # Cache the assignments
+            logger.info(f"Caching {len(assignments)} assignments to database")
             cache_canvas_assignments(facebook_id, assignments)
             
             # Log successful sync
@@ -407,7 +413,10 @@ def sync_canvas_assignments(facebook_id: str, token: str, force_refresh: bool = 
                 'success', 
                 len(assignments)
             )
+            logger.info(f"Successfully synced {len(assignments)} Canvas assignments")
         else:
+            logger.warning(f"No assignments returned from Canvas API for user {facebook_id}")
+            
             # Log failed sync but return cached data if available
             log_canvas_sync(
                 facebook_id,
@@ -416,7 +425,10 @@ def sync_canvas_assignments(facebook_id: str, token: str, force_refresh: bool = 
                 0,
                 'No assignments returned from Canvas API'
             )
+            
+            # Try to get cached data as fallback
             assignments = get_cached_canvas_assignments(facebook_id)
+            logger.info(f"Using {len(assignments)} cached assignments as fallback")
         
         return assignments
         
@@ -433,7 +445,9 @@ def sync_canvas_assignments(facebook_id: str, token: str, force_refresh: bool = 
         )
         
         # Return cached data as fallback
-        return get_cached_canvas_assignments(facebook_id)
+        cached_assignments = get_cached_canvas_assignments(facebook_id)
+        logger.info(f"Returning {len(cached_assignments)} cached assignments as error fallback")
+        return cached_assignments
 
 # Canvas Sync Functions
 def log_canvas_sync(facebook_id: str, sync_type: str, status: str, assignments_fetched: int = 0, error_message: str = None):

@@ -143,11 +143,21 @@ class CanvasAPIClient:
             List of assignment dictionaries
         """
         try:
+            logger.info(f"Fetching assignments from Canvas API (limit: {limit})")
+            
             # First get user's courses
             courses = self.get_user_courses(token)
+            logger.info(f"Found {len(courses)} courses for user")
+            
+            if not courses:
+                logger.warning("No courses found for user")
+                return []
+            
             assignments = []
             
             for course in courses[:10]:  # Limit to first 10 courses to avoid rate limits
+                logger.debug(f"Fetching assignments for course: {course['name']} ({course['id']})")
+                
                 course_assignments = self._make_request(
                     token, 
                     f'courses/{course["id"]}/assignments',
@@ -158,6 +168,8 @@ class CanvasAPIClient:
                 )
                 
                 if course_assignments:
+                    logger.info(f"Found {len(course_assignments)} assignments in {course['name']}")
+                    
                     for assignment in course_assignments:
                         # Only include assignments with due dates
                         if assignment.get('due_at'):
@@ -172,10 +184,19 @@ class CanvasAPIClient:
                                 'submission_types': assignment.get('submission_types', []),
                                 'html_url': assignment.get('html_url')
                             })
+                        else:
+                            logger.debug(f"Skipping assignment '{assignment.get('name')}' - no due date")
+                else:
+                    logger.info(f"No assignments found in {course['name']}")
+            
+            logger.info(f"Total assignments with due dates found: {len(assignments)}")
             
             # Sort by due date and return limited results
             assignments.sort(key=lambda x: x['due_date'] or '')
-            return assignments[:limit]
+            final_assignments = assignments[:limit]
+            
+            logger.info(f"Returning {len(final_assignments)} assignments after limit")
+            return final_assignments
             
         except Exception as e:
             logger.error(f"Error fetching assignments: {str(e)}")
