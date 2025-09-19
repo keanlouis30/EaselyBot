@@ -2,21 +2,20 @@
 # Facebook Messenger Bot for Canvas LMS Integration
 
 # Web Framework
-Flask==3.0.0
-Werkzeug==3.0.1
+Flask>=3.0.0
+Werkzeug>=3.0.1
 
 # HTTP Requests
-requests==2.31.0
+requests>=2.31.0
 
 # Environment Variables
-python-dotenv==1.0.0
+python-dotenv>=1.0.0
 
 # Production WSGI Server (optional, for deployment)
-gunicorn==21.2.0
+gunicorn>=21.2.0
 
 # Database (Supabase)
-supabase==2.3.4
-postgrest-py==0.10.6
+supabase>=2.3.0
 
 # Development Dependencies (uncomment for development)
 # pytest==7.4.3
