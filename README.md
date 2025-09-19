@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # EaselyBot
 
 🤖 **Facebook Messenger Chatbot for Canvas LMS Integration**
@@ -373,3 +374,6 @@ For support questions:
 - Review Render deployment logs
 - Verify Facebook App configuration
 - Test webhook endpoints manually
+=======
+# EaselyPrivacyPolicy
+>>>>>>> 91626ed042db76770b7431e069afd9de40942b50
