@@ -46,24 +46,9 @@ def handle_message(sender_id: str, text: str) -> None:
         # Don't interrupt active conversation flows
         in_active_flow = current_state in ['waiting_for_token', 'waiting_for_task_title', 'waiting_for_custom_date', 'waiting_for_custom_time']
         
-        if (text_lower in ['hi', 'hello', 'hey', 'menu', 'help', 'start'] or not user) and not in_active_flow:
-            # Check if user is new or returning
-            if is_new_user(sender_id):
-                # Send onboarding flow for new users
-                messenger_api.send_privacy_policy_consent(sender_id)
-                # Create user record in database
-                try:
-                    create_user(sender_id, first_interaction_message=text)
-                    logger.info(f"Created new user record for {sender_id}")
-                except Exception as e:
-                    logger.error(f"Error creating user record: {e}")
-            else:
-                # Send main menu for returning users
-                messenger_api.send_main_menu(sender_id)
-                return  # Exit early for returning users
-        
-        # Handle Canvas token input
-        elif is_waiting_for_token(sender_id):
+        # IMPORTANT: Check for active flows FIRST before checking if new user
+        # Handle Canvas token input - this takes priority
+        if is_waiting_for_token(sender_id):
             handle_token_input(sender_id, text)
         
         # Handle task title input
@@ -77,6 +62,24 @@ def handle_message(sender_id: str, text: str) -> None:
         # Handle custom time input
         elif is_waiting_for_custom_time(sender_id):
             handle_custom_time_input(sender_id, text)
+        
+        # Now check for greetings and new users - but only if not in active flow
+        elif (text_lower in ['hi', 'hello', 'hey', 'menu', 'help', 'start'] or is_new_user(sender_id)):
+            # Handle new users or greeting messages
+            if is_new_user(sender_id):
+                # Create user record if doesn't exist
+                if not user:
+                    try:
+                        create_user(sender_id)
+                        logger.info(f"Created new user record for {sender_id}")
+                    except Exception as e:
+                        logger.error(f"Error creating user: {str(e)}")
+                
+                # Start privacy policy flow for new users
+                messenger_api.send_privacy_policy_consent(sender_id)
+            else:
+                # Existing user asking for menu/help
+                messenger_api.send_main_menu(sender_id)
         
         # Handle activation code after payment
         elif text.upper() == 'ACTIVATE':
@@ -469,6 +472,7 @@ def handle_token_input(sender_id: str, token: str) -> None:
                 f"❌ Token validation failed: {error_msg}\n\n"
                 "Please check your Canvas token and try again, or type 'cancel' to go back."
             )
+            # Keep the user in waiting_for_token state so they can retry
             return
         
         # Token is valid, get user info
@@ -505,14 +509,6 @@ def handle_token_input(sender_id: str, token: str) -> None:
                 "but I'll notify you when new assignments are posted."
             )
         
-    except Exception as api_error:
-        logger.error(f"Canvas API validation error: {str(api_error)}")
-        messenger_api.send_text_message(
-            sender_id,
-            "⚠️ There was an issue connecting to Canvas. Your token appears valid, but I couldn't "
-            "fetch your assignments right now. Don't worry - I'll keep trying in the background!"
-        )
-    
         # Store the validated token in database (encrypt in production)
         try:
             from app.database.supabase_client import update_user
@@ -521,10 +517,35 @@ def handle_token_input(sender_id: str, token: str) -> None:
             update_user(sender_id, {
                 'canvas_token': token,  # In production, encrypt this
                 'last_canvas_sync': datetime.now(timezone.utc).isoformat(),
-                'canvas_sync_enabled': True
+                'canvas_sync_enabled': True,
+                'onboarding_completed': True  # Mark onboarding as complete
             })
-    except Exception as e:
-        logger.error(f"Error storing Canvas token: {str(e)}")
+            logger.info(f"Successfully stored Canvas token for user {sender_id}")
+        except Exception as db_error:
+            logger.error(f"Error storing Canvas token in database: {str(db_error)}")
+        
+    except Exception as api_error:
+        logger.error(f"Canvas API validation error: {str(api_error)}")
+        messenger_api.send_text_message(
+            sender_id,
+            "⚠️ There was an issue connecting to Canvas. Your token appears valid, but I couldn't "
+            "fetch your assignments right now. Don't worry - I'll keep trying in the background!"
+        )
+        
+        # Still store the token even if API validation fails (might be temporary issue)
+        try:
+            from app.database.supabase_client import update_user
+            from datetime import datetime, timezone
+            
+            update_user(sender_id, {
+                'canvas_token': token,  # In production, encrypt this
+                'last_canvas_sync': datetime.now(timezone.utc).isoformat(),
+                'canvas_sync_enabled': True,
+                'onboarding_completed': True  # Mark onboarding as complete
+            })
+            logger.info(f"Stored Canvas token despite API error for user {sender_id}")
+        except Exception as db_error:
+            logger.error(f"Error storing Canvas token: {str(db_error)}")
     
     # Clear the waiting state and mark onboarding complete
     clear_user_state(sender_id)
