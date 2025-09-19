@@ -293,6 +293,148 @@ def delete_task(task_id: int):
         logger.error(f"Error deleting task {task_id}: {str(e)}")
         raise
 
+# Canvas Assignment Caching Functions
+def cache_canvas_assignments(facebook_id: str, assignments: List[Dict[str, Any]]) -> None:
+    """Cache Canvas assignments in database for faster retrieval"""
+    try:
+        from datetime import datetime, timezone
+        
+        # First, clear existing cached assignments for this user
+        supabase_client.client.table('tasks').delete().eq('facebook_id', facebook_id).eq('task_type', 'canvas').execute()
+        
+        # Insert new assignments
+        cached_tasks = []
+        for assignment in assignments:
+            task_data = {
+                'facebook_id': facebook_id,
+                'title': assignment.get('title', 'Untitled Assignment'),
+                'due_date': assignment.get('due_date'),
+                'status': 'pending',
+                'task_type': 'canvas',
+                'priority': 'medium',
+                'canvas_assignment_id': assignment.get('id'),
+                'course_name': assignment.get('course_name'),
+                'course_code': assignment.get('course_code'),
+                'description': assignment.get('description'),
+                'points_possible': assignment.get('points_possible'),
+                'html_url': assignment.get('html_url'),
+                'created_at': datetime.now(timezone.utc).isoformat(),
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            }
+            cached_tasks.append(task_data)
+        
+        if cached_tasks:
+            supabase_client.client.table('tasks').insert(cached_tasks).execute()
+            logger.info(f"Cached {len(cached_tasks)} Canvas assignments for user {facebook_id}")
+        
+        # Update user's last sync timestamp
+        update_user(facebook_id, {
+            'last_canvas_sync': datetime.now(timezone.utc).isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error caching Canvas assignments for user {facebook_id}: {str(e)}")
+        raise
+
+def get_cached_canvas_assignments(facebook_id: str) -> List[Dict[str, Any]]:
+    """Get cached Canvas assignments from database"""
+    try:
+        response = supabase_client.client.table('tasks').select('*').eq(
+            'facebook_id', facebook_id
+        ).eq('task_type', 'canvas').order('due_date', desc=False).execute()
+        
+        assignments = []
+        for task in response.data or []:
+            # Convert database format back to Canvas API format
+            assignment = {
+                'id': task.get('canvas_assignment_id'),
+                'title': task.get('title'),
+                'course_name': task.get('course_name'),
+                'course_code': task.get('course_code'),
+                'due_date': task.get('due_date'),
+                'description': task.get('description'),
+                'points_possible': task.get('points_possible'),
+                'html_url': task.get('html_url')
+            }
+            assignments.append(assignment)
+        
+        return assignments
+        
+    except Exception as e:
+        logger.error(f"Error fetching cached Canvas assignments for user {facebook_id}: {str(e)}")
+        return []
+
+def is_canvas_cache_fresh(facebook_id: str, max_age_hours: int = 2) -> bool:
+    """Check if Canvas cache is fresh enough to use"""
+    try:
+        from datetime import datetime, timezone, timedelta
+        
+        user = get_user(facebook_id)
+        if not user or not user.get('last_canvas_sync'):
+            return False
+        
+        last_sync = datetime.fromisoformat(user['last_canvas_sync'].replace('Z', '+00:00'))
+        max_age = timedelta(hours=max_age_hours)
+        
+        return (datetime.now(timezone.utc) - last_sync) < max_age
+        
+    except Exception as e:
+        logger.debug(f"Error checking cache freshness for user {facebook_id}: {str(e)}")
+        return False
+
+def sync_canvas_assignments(facebook_id: str, token: str, force_refresh: bool = False) -> List[Dict[str, Any]]:
+    """Sync Canvas assignments with database cache"""
+    try:
+        # Check if cache is fresh and we don't need to refresh
+        if not force_refresh and is_canvas_cache_fresh(facebook_id):
+            logger.info(f"Using cached Canvas assignments for user {facebook_id}")
+            return get_cached_canvas_assignments(facebook_id)
+        
+        # Fetch fresh data from Canvas API
+        logger.info(f"Fetching fresh Canvas assignments for user {facebook_id}")
+        from app.api.canvas_api import fetch_user_assignments
+        
+        assignments = fetch_user_assignments(token, limit=100)
+        
+        if assignments:
+            # Cache the assignments
+            cache_canvas_assignments(facebook_id, assignments)
+            
+            # Log successful sync
+            log_canvas_sync(
+                facebook_id, 
+                'automatic', 
+                'success', 
+                len(assignments)
+            )
+        else:
+            # Log failed sync but return cached data if available
+            log_canvas_sync(
+                facebook_id,
+                'automatic',
+                'no_data',
+                0,
+                'No assignments returned from Canvas API'
+            )
+            assignments = get_cached_canvas_assignments(facebook_id)
+        
+        return assignments
+        
+    except Exception as e:
+        logger.error(f"Error syncing Canvas assignments for user {facebook_id}: {str(e)}")
+        
+        # Log failed sync
+        log_canvas_sync(
+            facebook_id,
+            'automatic',
+            'error',
+            0,
+            str(e)
+        )
+        
+        # Return cached data as fallback
+        return get_cached_canvas_assignments(facebook_id)
+
 # Canvas Sync Functions
 def log_canvas_sync(facebook_id: str, sync_type: str, status: str, assignments_fetched: int = 0, error_message: str = None):
     """Log Canvas synchronization attempt"""

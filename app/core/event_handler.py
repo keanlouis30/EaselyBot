@@ -236,11 +236,11 @@ def handle_privacy_decline(sender_id: str) -> None:
 
 
 def handle_privacy_policy_read(sender_id: str) -> None:
-    """Handle privacy policy read - open link and show agreement after delay"""
+    """Handle privacy policy read - user clicked to review policy"""
     import threading
     import time
     
-    # Immediately send the privacy policy link
+    # Send confirmation and link
     buttons = [
         messenger_api.create_url_button(
             "📜 Read Privacy Policy",
@@ -249,16 +249,22 @@ def handle_privacy_policy_read(sender_id: str) -> None:
     ]
     messenger_api.send_button_template(
         sender_id,
-        "Please review our Privacy Policy. It explains how we protect your data and integrate with Canvas.",
+        "📖 Click the button below to review our Privacy Policy. I'll ask for your agreement in a moment.",
         buttons
     )
     
-    # Start a background thread to show agreement after 5 seconds
+    # Send a follow-up message to let them know the timer is starting
+    messenger_api.send_text_message(
+        sender_id,
+        "⏱️ Take your time reading. I'll check back with you in 5 seconds..."
+    )
+    
+    # Background thread to show agreement after 5 seconds
     def show_agreement_delayed():
-        time.sleep(5)  # Wait 5 seconds
+        time.sleep(5)  # Give user time to read
         messenger_api.send_privacy_agreement_option(sender_id)
     
-    # Start the delayed response in a separate thread
+    # Start the delayed response
     threading.Thread(target=show_agreement_delayed, daemon=True).start()
 
 
@@ -278,11 +284,11 @@ def handle_terms_decline(sender_id: str) -> None:
 
 
 def handle_terms_read(sender_id: str) -> None:
-    """Handle terms of use read - open link and show agreement after delay"""
+    """Handle terms of use read - user clicked to review terms"""
     import threading
     import time
     
-    # Immediately send the terms of use link
+    # Send confirmation and link
     buttons = [
         messenger_api.create_url_button(
             "⚖️ Read Terms of Use",
@@ -291,16 +297,22 @@ def handle_terms_read(sender_id: str) -> None:
     ]
     messenger_api.send_button_template(
         sender_id,
-        "Please review our Terms of Use. This covers your responsibilities and our service terms.",
+        "📖 Click the button below to review our Terms of Use. I'll check back with you shortly.",
         buttons
     )
     
-    # Start a background thread to show agreement after 5 seconds
+    # Send a follow-up message to let them know the timer is starting
+    messenger_api.send_text_message(
+        sender_id,
+        "⏱️ Take your time reading. I'll ask for your agreement in 5 seconds..."
+    )
+    
+    # Background thread to show agreement after 5 seconds
     def show_agreement_delayed():
-        time.sleep(5)  # Wait 5 seconds
+        time.sleep(5)  # Give user time to read
         messenger_api.send_terms_agreement_option(sender_id)
     
-    # Start the delayed response in a separate thread
+    # Start the delayed response
     threading.Thread(target=show_agreement_delayed, daemon=True).start()
 
 
@@ -488,8 +500,9 @@ def handle_token_input(sender_id: str, token: str) -> None:
             f"✅ Token verified! Welcome {user_name}! Syncing your Canvas data..."
         )
         
-        # Fetch real assignments from Canvas
-        assignments = fetch_user_assignments(token, limit=5)
+        # Fetch and cache assignments from Canvas
+        from app.database.supabase_client import sync_canvas_assignments
+        assignments = sync_canvas_assignments(sender_id, token, force_refresh=True)
         
         if assignments:
             # Format and show real assignments
@@ -729,9 +742,9 @@ def handle_get_tasks_today(sender_id: str) -> None:
         # Show typing indicator
         messenger_api.send_typing_indicator(sender_id, "typing_on")
         
-        # Fetch assignments from Canvas
-        from app.api.canvas_api import fetch_user_assignments
-        assignments = fetch_user_assignments(token, limit=50)
+        # Get assignments from cache or Canvas API
+        from app.database.supabase_client import sync_canvas_assignments
+        assignments = sync_canvas_assignments(sender_id, token)
         
         # Filter for today
         today_assignments = filter_assignments_by_date(assignments, 'today')
@@ -766,9 +779,9 @@ def handle_get_tasks_week(sender_id: str) -> None:
         # Show typing indicator
         messenger_api.send_typing_indicator(sender_id, "typing_on")
         
-        # Fetch assignments from Canvas
-        from app.api.canvas_api import fetch_user_assignments
-        assignments = fetch_user_assignments(token, limit=50)
+        # Get assignments from cache or Canvas API
+        from app.database.supabase_client import sync_canvas_assignments
+        assignments = sync_canvas_assignments(sender_id, token)
         
         # Filter for this week
         week_assignments = filter_assignments_by_date(assignments, 'week')
@@ -803,9 +816,9 @@ def handle_get_tasks_overdue(sender_id: str) -> None:
         # Show typing indicator
         messenger_api.send_typing_indicator(sender_id, "typing_on")
         
-        # Fetch assignments from Canvas
-        from app.api.canvas_api import fetch_user_assignments
-        assignments = fetch_user_assignments(token, limit=50)
+        # Get assignments from cache or Canvas API
+        from app.database.supabase_client import sync_canvas_assignments
+        assignments = sync_canvas_assignments(sender_id, token)
         
         # Filter for overdue
         overdue_assignments = filter_assignments_by_date(assignments, 'overdue')
@@ -840,9 +853,9 @@ def handle_get_tasks_all(sender_id: str) -> None:
         # Show typing indicator
         messenger_api.send_typing_indicator(sender_id, "typing_on")
         
-        # Fetch assignments from Canvas
-        from app.api.canvas_api import fetch_user_assignments
-        assignments = fetch_user_assignments(token, limit=50)
+        # Get assignments from cache or Canvas API
+        from app.database.supabase_client import sync_canvas_assignments
+        assignments = sync_canvas_assignments(sender_id, token)
         
         # Filter for all upcoming (future assignments)
         upcoming_assignments = filter_assignments_by_date(assignments, 'all')
