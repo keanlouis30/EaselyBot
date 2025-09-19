@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: easely-bot
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 1 --timeout 120 main:app
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.6
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: false
+    # Auto-deploy from main branch
+    autoDeploy: true
