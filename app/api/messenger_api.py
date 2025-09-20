@@ -139,7 +139,7 @@ def send_main_menu(recipient_id: str) -> bool:
         create_quick_reply("Due Today", "GET_TASKS_TODAY"),
         create_quick_reply("This Week", "GET_TASKS_WEEK"),
         create_quick_reply("Overdue", "GET_TASKS_OVERDUE"),
-        create_quick_reply("View All", "GET_TASKS_ALL"),
+        create_quick_reply("Upcoming", "GET_TASKS_ALL"),
         create_quick_reply("Add Task", "ADD_NEW_TASK")
     ]
     

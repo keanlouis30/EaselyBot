@@ -779,9 +779,10 @@ def filter_assignments_by_date(assignments: List[Dict], filter_type: str) -> Lis
                 if due_date_manila < today_start:  # Before today starts in Manila
                     filtered.append(assignment)
             elif filter_type == 'all':
-                # All assignments that are NOT completed (show everything: future, today, and even overdue)
-                # This should show ALL tasks regardless of due date
-                filtered.append(assignment)
+                # All FUTURE assignments (from today onwards, not overdue)
+                # Only show tasks that are due today or in the future
+                if due_date_manila >= today_start:  # From today onwards only
+                    filtered.append(assignment)
                     
         except (ValueError, AttributeError) as e:
             logger.debug(f"Error parsing date {assignment.get('due_date')}: {e}")
@@ -1018,7 +1019,7 @@ def handle_get_tasks_overdue(sender_id: str) -> None:
 
 
 def handle_get_tasks_all(sender_id: str) -> None:
-    """Show all upcoming tasks"""
+    """Show all upcoming tasks (from today onwards, excluding overdue)"""
     try:
         # Get user's Canvas token
         token = get_user_canvas_token(sender_id)
@@ -1040,11 +1041,11 @@ def handle_get_tasks_all(sender_id: str) -> None:
         from app.database.supabase_client import sync_canvas_assignments
         assignments = sync_canvas_assignments(sender_id, token)
         
-        # Filter for all upcoming (future assignments)
+        # Filter for all upcoming (future assignments from today onwards)
         upcoming_assignments = filter_assignments_by_date(assignments, 'all')
         
         # Send assignments individually
-        send_assignments_individually(sender_id, upcoming_assignments, "🗾 All Upcoming Tasks")
+        send_assignments_individually(sender_id, upcoming_assignments, "📅 Upcoming Tasks")
         
     except Exception as e:
         logger.error(f"Error fetching all tasks for user {sender_id}: {str(e)}")
@@ -1818,7 +1819,7 @@ def handle_sync_canvas(sender_id: str) -> None:
         
         # Show quick actions after sync
         quick_replies = [
-            messenger_api.create_quick_reply("📚 View Tasks", "GET_TASKS_ALL"),
+            messenger_api.create_quick_reply("📅 Upcoming", "GET_TASKS_ALL"),
             messenger_api.create_quick_reply("🔥 Due Today", "GET_TASKS_TODAY"),
             messenger_api.create_quick_reply("🏠 Main Menu", "MAIN_MENU")
         ]
