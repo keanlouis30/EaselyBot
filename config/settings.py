@@ -39,7 +39,7 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 
 # Payment Configuration (Ko-fi)
 KOFI_WEBHOOK_TOKEN = os.getenv('KOFI_WEBHOOK_TOKEN', '')
-KOFI_SHOP_URL = os.getenv('KOFI_SHOP_URL', 'https://ko-fi.com/easely')
+KOFI_SHOP_URL = os.getenv('KOFI_SHOP_URL', 'https://facebook.com/keanlouis30')
 
 # Feature Flags
 ENABLE_AI_FEATURES = os.getenv('ENABLE_AI_FEATURES', 'False').lower() in ['true', '1', 'yes']
@@ -118,7 +118,7 @@ CONFIG = {
     },
     'payment': {
         'kofi_webhook_token': KOFI_WEBHOOK_TOKEN,
-        'kofi_shop_url': KOFI_SHOP_URL
+        'kofi_shop_url': KOFI_SHOP_URL  # Now points to Facebook profile for premium upgrades
     },
     'features': {
         'ai_enabled': ENABLE_AI_FEATURES,

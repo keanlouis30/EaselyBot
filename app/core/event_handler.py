@@ -1439,29 +1439,28 @@ def handle_premium_activation(sender_id: str) -> None:
 
 def handle_show_premium(sender_id: str) -> None:
     """Show premium features and pricing"""
-    premium_text = (
+premium_text = (
         "💎 Easely Premium Features\n\n"
         "Upgrade for advanced features:\n\n"
-        "🔔 **Enhanced Reminders**\n"
+        "🔔 Enhanced Reminders\n"
         "• Multiple alerts (1w, 3d, 1d, 8h, 2h, 1h)\n"
         "• Smart notification timing\n\n"
-        "📝 **Unlimited Tasks**\n"
+        "📝 Unlimited Tasks\n"
         "• Add as many custom tasks as you need\n"
         "• Full Canvas integration\n\n"
-        "🤖 **AI Study Planning**\n"
+        "🤖 AI Study Planning\n"
         "• Personalized study schedules\n"
         "• Workload optimization\n\n"
-        "📊 **Analytics & Reports**\n"
+        "📊 Analytics & Reports\n"
         "• Weekly progress summaries\n"
         "• Performance insights\n\n"
-        "💰 **Only $4.99/month**\n"
-        "Cancel anytime. 7-day free trial!"
+        "To upgrade, please message Kean Rosales or visit facebook.com/keanlouis30"
     )
     
-    buttons = [
+buttons = [
         messenger_api.create_url_button(
             "💎 Upgrade Now",
-            "https://ko-fi.com/easely/shop"
+            "https://facebook.com/keanlouis30"
         )
     ]
     

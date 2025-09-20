@@ -56,7 +56,7 @@ def main():
             print("     └── ⚙️ Settings")
             print()
             print("   💎 Premium & Support")
-            print("     └── ✨ Upgrade Premium")
+            print("     └── ✨ Upgrade to Premium (opens facebook.com/keanlouis30)")
             print("     └── ❓ Help & Support")
             print("     └── ℹ️ About Easely")
             
