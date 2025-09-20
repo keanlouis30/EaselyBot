@@ -25,15 +25,16 @@ class CanvasAPIClient:
         max_delay=10.0,
         exceptions=(requests.exceptions.RequestException, requests.exceptions.Timeout)
     )
-    def _make_request(self, token: str, endpoint: str, method: str = 'GET', params: Dict = None) -> Optional[Any]:
+    def _make_request(self, token: str, endpoint: str, method: str = 'GET', params: Dict = None, paginate: bool = False) -> Optional[Any]:
         """
-        Make authenticated request to Canvas API with retry logic
+        Make authenticated request to Canvas API with retry logic and optional pagination
         
         Args:
             token: Canvas access token
             endpoint: API endpoint (without /api/v1 prefix)
             method: HTTP method
             params: Query parameters
+            paginate: Whether to fetch all pages of results
             
         Returns:
             Response data or None if failed
@@ -45,6 +46,52 @@ class CanvasAPIClient:
                 'Content-Type': 'application/json'
             }
             
+            # If pagination is requested, collect all results
+            if paginate and method == 'GET':
+                all_results = []
+                page_url = url
+                page_params = params or {}
+                
+                while page_url:
+                    response = requests.get(
+                        page_url,
+                        headers=headers,
+                        params=page_params,
+                        timeout=10
+                    )
+                    
+                    if response.status_code == 200:
+                        page_data = response.json()
+                        if isinstance(page_data, list):
+                            all_results.extend(page_data)
+                        else:
+                            all_results.append(page_data)
+                        
+                        # Check for next page in Link header
+                        link_header = response.headers.get('Link', '')
+                        next_url = None
+                        for link in link_header.split(','):
+                            if 'rel="next"' in link:
+                                next_url = link.split(';')[0].strip('<>')
+                                break
+                        
+                        if next_url:
+                            page_url = next_url
+                            page_params = {}  # URL already has params
+                        else:
+                            break
+                    else:
+                        if is_retryable_http_error(response.status_code):
+                            raise requests.exceptions.RequestException(
+                                f"Retryable Canvas API error: {response.status_code}"
+                            )
+                        else:
+                            logger.error(f"Canvas API error: {response.status_code}")
+                            break
+                
+                return all_results if all_results else None
+            
+            # Non-paginated request
             response = requests.request(
                 method=method,
                 url=url,
@@ -116,7 +163,7 @@ class CanvasAPIClient:
     
     def get_user_courses(self, token: str) -> List[Dict[str, Any]]:
         """
-        Get user's active courses
+        Get ALL user's active courses (with pagination)
         
         Args:
             token: Canvas access token
@@ -125,10 +172,11 @@ class CanvasAPIClient:
             List of course dictionaries
         """
         try:
+            # Use pagination to get ALL courses
             courses = self._make_request(token, 'courses', params={
                 'enrollment_state': 'active',
                 'per_page': 100
-            })
+            }, paginate=True)
             
             if courses:
                 return [{
@@ -171,13 +219,15 @@ class CanvasAPIClient:
             for course in courses:  # Get ALL courses, not just first 10
                 logger.debug(f"Fetching assignments for course: {course['name']} ({course['id']})")
                 
+                # Use pagination to get ALL assignments from each course
                 course_assignments = self._make_request(
                     token, 
                     f'courses/{course["id"]}/assignments',
                     params={
                         'per_page': 100,  # Get more assignments per course
                         'order_by': 'due_at'
-                    }
+                    },
+                    paginate=True  # Enable pagination to get ALL assignments
                 )
                 
                 if course_assignments:
@@ -418,16 +468,18 @@ def validate_canvas_token(token: str) -> Dict[str, Any]:
 
 def fetch_user_assignments(token: str, limit: int = 500) -> List[Dict[str, Any]]:
     """
-    Convenience function to fetch user assignments
+    Convenience function to fetch ALL user assignments
     
     Args:
         token: Canvas access token
-        limit: Maximum assignments to return (default 200 for all)
+        limit: Maximum assignments to return (default 500 for all)
         
     Returns:
         List of assignment dictionaries
     """
-    # Get assignments for the next 90 days to ensure we get all relevant ones
-    assignments = canvas_client.get_upcoming_assignments(token, days_ahead=90)
-    # Return all assignments, not truncated
+    # Get ALL assignments from all courses, not just upcoming
+    # This ensures we get everything including far future assignments
+    assignments = canvas_client.get_assignments(token, limit=limit)
+    logger.info(f"fetch_user_assignments returning {len(assignments) if assignments else 0} total assignments")
+    # Return all assignments without date filtering
     return assignments
