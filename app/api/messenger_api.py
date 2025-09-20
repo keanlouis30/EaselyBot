@@ -653,7 +653,7 @@ def send_video_file(recipient_id: str, video_path: str) -> bool:
         # Upload video file directly to Facebook
         with open(video_path, 'rb') as video_file:
             files = {
-                'filedata': (os.path.basename(video_path), video_file, 'video/mp4')
+                'filedata': (os.path.basename(video_path), video_file, 'video/x-matroska' if video_path.endswith('.mkv') else 'video/mp4')
             }
             
             data = {

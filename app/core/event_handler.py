@@ -409,16 +409,82 @@ def handle_token_need_help(sender_id: str) -> None:
 
 
 def handle_watch_video(sender_id: str) -> None:
-    """Send the video tutorial file"""
+    """Send video tutorial - try video first, fallback to instructions"""
+    import os
+    
+    # Try to send the video if we're in local environment
+    if os.environ.get('APP_ENV') != 'production':
+        # Try to send actual video file
+        video_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "test.mkv")
+        if os.path.exists(video_path):
+            messenger_api.send_text_message(
+                sender_id,
+                "🎥 Here's a video tutorial showing how to generate your Canvas token:"
+            )
+            success = messenger_api.send_video_file(sender_id, video_path)
+            if success:
+                # After video, ask if they're ready
+                quick_replies = [
+                    messenger_api.create_quick_reply("🔑 I have my token", "TOKEN_READY"),
+                    messenger_api.create_quick_reply("🔄 Show steps again", "TOKEN_NEED_HELP")
+                ]
+                messenger_api.send_quick_replies(
+                    sender_id,
+                    "After watching the video, do you have your token ready?",
+                    quick_replies
+                )
+                return
+    
+    # For production or if video fails, provide detailed instructions with images
     messenger_api.send_text_message(
         sender_id,
-        "🎥 Here's a step-by-step video showing exactly how to generate your Canvas token:"
+        "🎥 **Visual Guide: Getting Your Canvas Token**\n\n"
+        "Follow these steps carefully:"
     )
     
-    # Send the video file - use relative path that works in deployment
-    import os
-    video_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "test.mkv")
-    messenger_api.send_video_file(sender_id, video_path)
+    # Send step-by-step with better formatting
+    steps = [
+        (
+            "🔵 **Step 1: Open Canvas Settings**\n"
+            "1. Log into Canvas\n"
+            "2. Click your profile picture (top-left)\n"
+            "3. Select 'Account'\n"
+            "4. Click 'Settings'"
+        ),
+        (
+            "🔵 **Step 2: Find Integrations**\n"
+            "Scroll down to find 'Approved Integrations' section\n"
+            "(It's usually near the bottom of the page)"
+        ),
+        (
+            "🔵 **Step 3: Create New Token**\n"
+            "Click the '+ New Access Token' button"
+        ),
+        (
+            "🔵 **Step 4: Configure Your Token**\n"
+            "Purpose: Enter 'Easely Bot'\n"
+            "Expires: Leave blank (recommended)\n"
+            "Click 'Generate Token'"
+        ),
+        (
+            "⚠️ **CRITICAL: Copy Your Token!**\n"
+            "🔴 COPY THE TOKEN IMMEDIATELY\n"
+            "🔴 You won't see it again!\n"
+            "🔴 It looks like: 1234~ABcd5678..."
+        )
+    ]
+    
+    # Send each step as separate message for clarity
+    import time
+    for step in steps:
+        messenger_api.send_text_message(sender_id, step)
+        time.sleep(0.5)  # Brief pause between steps
+    
+    # Offer alternative help
+    messenger_api.send_text_message(
+        sender_id,
+        "💡 **Pro Tip:** Keep the Canvas settings page open in another tab while you paste the token here!"
+    )
     
     # After video, ask if they're ready
     quick_replies = [
