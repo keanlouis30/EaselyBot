@@ -884,7 +884,6 @@ def handle_get_tasks_today(sender_id: str) -> None:
         # ALWAYS get assignments from database (never hit Canvas API here)
         from app.database.supabase_client import sync_canvas_assignments
         assignments = sync_canvas_assignments(sender_id, token, force_refresh=False)
-ments(sender_id, token, force_refresh=False)
         
         # Filter for today
         today_assignments = filter_assignments_by_date(assignments, 'today')
