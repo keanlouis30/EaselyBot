@@ -250,6 +250,76 @@ class CanvasAPIClient:
         except Exception as e:
             logger.error(f"Error fetching upcoming assignments: {str(e)}")
             return []
+    
+    def create_calendar_event(self, token: str, title: str, start_at: str, end_at: str = None, description: str = None) -> Dict[str, Any]:
+        """
+        Create a calendar event in Canvas (user's personal calendar)
+        
+        Args:
+            token: Canvas access token
+            title: Event title
+            start_at: Event start datetime in ISO format
+            end_at: Event end datetime (optional, defaults to start_at)
+            description: Event description (optional)
+            
+        Returns:
+            Created event data or error dict
+        """
+        try:
+            # If no end time specified, make it same as start (all-day or point event)
+            if not end_at:
+                end_at = start_at
+            
+            # Prepare event data
+            event_data = {
+                'calendar_event': {
+                    'context_code': 'user_self',  # Personal calendar
+                    'title': title,
+                    'start_at': start_at,
+                    'end_at': end_at
+                }
+            }
+            
+            if description:
+                event_data['calendar_event']['description'] = description
+            
+            # Make POST request to create event
+            url = f"{self.base_url}/api/{self.api_version}/calendar_events"
+            headers = {
+                'Authorization': f'Bearer {token}',
+                'Content-Type': 'application/json'
+            }
+            
+            response = requests.post(
+                url=url,
+                headers=headers,
+                json=event_data,
+                timeout=10
+            )
+            
+            if response.status_code in [200, 201]:
+                event = response.json()
+                logger.info(f"Created Canvas calendar event: {title}")
+                return {
+                    'success': True,
+                    'event_id': event.get('id'),
+                    'title': event.get('title'),
+                    'start_at': event.get('start_at'),
+                    'html_url': event.get('html_url')
+                }
+            else:
+                logger.error(f"Failed to create calendar event: {response.status_code} - {response.text}")
+                return {
+                    'success': False,
+                    'error': f"Canvas API error: {response.status_code}"
+                }
+                
+        except Exception as e:
+            logger.error(f"Error creating calendar event: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
 
 
 # Global Canvas API client instance

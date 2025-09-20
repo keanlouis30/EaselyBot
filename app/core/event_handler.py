@@ -58,7 +58,7 @@ def handle_message(sender_id: str, text: str) -> None:
             pass
         
         # Don't interrupt active conversation flows
-        in_active_flow = current_state in ['waiting_for_token', 'waiting_for_task_title', 'waiting_for_custom_date', 'waiting_for_custom_time']
+        in_active_flow = current_state in ['waiting_for_token', 'waiting_for_task_title', 'waiting_for_custom_date', 'waiting_for_custom_time', 'waiting_for_task_details']
         
         # IMPORTANT: Check for active flows FIRST before checking if new user
         # Handle Canvas token input - this takes priority
@@ -76,6 +76,10 @@ def handle_message(sender_id: str, text: str) -> None:
         # Handle custom time input
         elif is_waiting_for_custom_time(sender_id):
             handle_custom_time_input(sender_id, text)
+        
+        # Handle task details input
+        elif is_waiting_for_task_details(sender_id):
+            handle_task_details_input(sender_id, text)
         
         # Now check for greetings and new users - but only if not in active flow
         elif (text_lower in ['hi', 'hello', 'hey', 'menu', 'help', 'start'] or is_new_user(sender_id)):
@@ -1142,25 +1146,18 @@ def handle_time_selection(sender_id: str, payload: str) -> None:
     
     time = time_map.get(payload, "11:59 PM")
     
-    # Get stored task data
-    if sender_id in user_sessions:
-        title = user_sessions[sender_id].get('task_title', 'New Task')
-        date = user_sessions[sender_id].get('task_date', 'Today')
-        
-        # In production, save to database and sync with Canvas
-        messenger_api.send_text_message(
-            sender_id,
-            f"✅ Task added successfully!\\n\\n"
-            f"📚 {title}\\n"
-            f"📅 Due: {date} at {time}\\n\\n"
-            f"The task has been added to your Canvas calendar."
-        )
-        
-        # Clear session data
+    # Store time in session
+    if sender_id not in user_sessions:
         user_sessions[sender_id] = {}
+    user_sessions[sender_id]['task_time'] = time
     
-    # Show menu again
-    messenger_api.send_main_menu(sender_id)
+    # Ask for task details
+    set_user_state(sender_id, "waiting_for_task_details")
+    messenger_api.send_text_message(
+        sender_id,
+        "Would you like to add any details or description for this task? \n\n"
+        "(Type your description, or type 'skip' if you don't need details)"
+    )
 
 
 def handle_custom_date_input(sender_id: str, date_text: str) -> None:
@@ -1252,26 +1249,18 @@ def handle_custom_time_input(sender_id: str, time_text: str) -> None:
         else:
             raise ValueError("Invalid time format")
         
-        # Get stored task data and create task
-        if sender_id in user_sessions:
-            title = user_sessions[sender_id].get('task_title', 'New Task')
-            date = user_sessions[sender_id].get('task_date', 'Today')
-            
-            # In production, save to database and sync with Canvas
-            messenger_api.send_text_message(
-                sender_id,
-                f"✅ Task added successfully!\\n\\n"
-                f"📚 {title}\\n"
-                f"📅 Due: {date} at {time_str}\\n\\n"
-                f"The task has been added to your Canvas calendar."
-            )
-            
-            # Clear session data
+        # Store time in session
+        if sender_id not in user_sessions:
             user_sessions[sender_id] = {}
+        user_sessions[sender_id]['task_time'] = time_str
         
-        clear_user_state(sender_id)
-        # Show menu again
-        messenger_api.send_main_menu(sender_id)
+        # Ask for task details
+        set_user_state(sender_id, "waiting_for_task_details")
+        messenger_api.send_text_message(
+            sender_id,
+            "Would you like to add any details or description for this task? \n\n"
+            "(Type your description, or type 'skip' if you don't need details)"
+        )
         
     except ValueError:
         messenger_api.send_text_message(
@@ -1279,6 +1268,157 @@ def handle_custom_time_input(sender_id: str, time_text: str) -> None:
             "🕰️ Invalid time format. \n\n"
             "Please enter a time like '2:30 PM', '14:30', or '11:59 PM', or type 'cancel' to go back."
         )
+
+
+def handle_task_details_input(sender_id: str, details: str) -> None:
+    """Handle task details input and create the task"""
+    details = details.strip()
+    
+    # Check if user wants to cancel
+    if details.lower() in ['cancel', 'back', 'menu', 'stop']:
+        clear_user_state(sender_id)
+        if sender_id in user_sessions:
+            user_sessions[sender_id] = {}
+        messenger_api.send_text_message(
+            sender_id,
+            "Task creation cancelled. You can try again anytime!"
+        )
+        messenger_api.send_main_menu(sender_id)
+        return
+    
+    # Check if user wants to skip details
+    if details.lower() in ['skip', 'no', 'none', 'n/a']:
+        details = None
+    
+    # Get stored task data
+    if sender_id not in user_sessions:
+        messenger_api.send_text_message(
+            sender_id,
+            "❌ Task session expired. Please start over by selecting 'Add Task' from the menu."
+        )
+        clear_user_state(sender_id)
+        messenger_api.send_main_menu(sender_id)
+        return
+    
+    title = user_sessions[sender_id].get('task_title')
+    date_str = user_sessions[sender_id].get('task_date')
+    time_str = user_sessions[sender_id].get('task_time', '11:59 PM')
+    
+    if not title or not date_str:
+        messenger_api.send_text_message(
+            sender_id,
+            "❌ Missing task information. Please start over by selecting 'Add Task' from the menu."
+        )
+        clear_user_state(sender_id)
+        user_sessions[sender_id] = {}
+        messenger_api.send_main_menu(sender_id)
+        return
+    
+    # Create the task in database and Canvas
+    success = create_and_sync_task(sender_id, title, date_str, time_str, details)
+    
+    if success:
+        # Success message
+        message = f"✅ Task added successfully!\\n\\n" \
+                  f"📚 {title}\\n" \
+                  f"📅 Due: {date_str} at {time_str}\\n"
+        
+        if details and details.lower() not in ['skip', 'no', 'none', 'n/a']:
+            message += f"📝 Details: {details}\\n"
+        
+        message += "\\nThe task has been added to your database and Canvas calendar."
+        
+        messenger_api.send_text_message(sender_id, message)
+    else:
+        messenger_api.send_text_message(
+            sender_id,
+            "⚠️ Task was saved locally but couldn't sync with Canvas. " 
+            "It will appear in your task list."
+        )
+    
+    # Clear session data
+    clear_user_state(sender_id)
+    user_sessions[sender_id] = {}
+    
+    # Show menu again
+    messenger_api.send_main_menu(sender_id)
+
+
+def create_and_sync_task(sender_id: str, title: str, date_str: str, time_str: str, details: str = None) -> bool:
+    """Create task in database and sync with Canvas"""
+    try:
+        from datetime import datetime, timezone
+        from app.database.supabase_client import create_task, get_user
+        from app.api.canvas_api import canvas_client
+        
+        # Combine date and time into a single datetime
+        # Parse the date (assuming it's in YYYY-MM-DD format from storage)
+        if date_str == str(get_manila_now().date()):
+            # If it's today, use today's date
+            date_part = get_manila_now().date()
+        else:
+            date_part = datetime.strptime(date_str, '%Y-%m-%d').date()
+        
+        # Parse the time
+        time_part = datetime.strptime(time_str, '%I:%M %p').time()
+        
+        # Combine date and time, then convert to UTC for storage
+        import pytz
+        manila_tz = pytz.timezone('Asia/Manila')
+        due_datetime = datetime.combine(date_part, time_part)
+        due_datetime = manila_tz.localize(due_datetime)
+        due_datetime_utc = due_datetime.astimezone(timezone.utc)
+        
+        # Create task in database
+        task_data = create_task(
+            facebook_id=sender_id,
+            title=title,
+            due_date=due_datetime_utc.isoformat(),
+            description=details,
+            task_type='manual',
+            priority='medium'
+        )
+        
+        logger.info(f"Task created in database for user {sender_id}: {title}")
+        
+        # Try to sync with Canvas if user has token
+        user = get_user(sender_id)
+        canvas_synced = False
+        
+        if user and user.get('canvas_token'):
+            try:
+                # Create a calendar event in Canvas
+                event_title = f"[Easely Task] {title}"
+                event_description = details if details else f"Task: {title}"
+                
+                result = canvas_client.create_calendar_event(
+                    token=user['canvas_token'],
+                    title=event_title,
+                    start_at=due_datetime_utc.isoformat(),
+                    end_at=due_datetime_utc.isoformat(),
+                    description=event_description
+                )
+                
+                if result.get('success'):
+                    logger.info(f"Task synced to Canvas calendar for user {sender_id}: {title} (Event ID: {result.get('event_id')})")
+                    canvas_synced = True
+                    
+                    # Update task with Canvas event ID
+                    if task_data and result.get('event_id'):
+                        from app.database.supabase_client import update_task
+                        update_task(task_data['id'], {'canvas_event_id': str(result['event_id'])})
+                else:
+                    logger.warning(f"Failed to sync task to Canvas for user {sender_id}: {result.get('error')}")
+                    
+            except Exception as canvas_error:
+                logger.error(f"Error syncing task to Canvas for user {sender_id}: {str(canvas_error)}")
+        
+        # Return true if database save was successful (Canvas sync is optional)
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error creating task for user {sender_id}: {str(e)}")
+        return False
 
 
 def handle_premium_activation(sender_id: str) -> None:
@@ -1513,6 +1653,21 @@ def is_waiting_for_custom_time(sender_id: str) -> bool:
     # Fallback to memory session
     return (sender_id in user_sessions and 
             user_sessions[sender_id].get('state') == 'waiting_for_custom_time')
+
+
+def is_waiting_for_task_details(sender_id: str) -> bool:
+    """Check if waiting for task details input"""
+    try:
+        # Check database session first
+        db_state = get_user_session(sender_id, 'conversation_state')
+        if db_state == 'waiting_for_task_details':
+            return True
+    except Exception as e:
+        logger.debug(f"Error checking database session: {str(e)}")
+    
+    # Fallback to memory session
+    return (sender_id in user_sessions and 
+            user_sessions[sender_id].get('state') == 'waiting_for_task_details')
 
 
 # Persistent menu handlers
