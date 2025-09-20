@@ -470,6 +470,7 @@ def handle_watch_video(sender_id: str) -> None:
     messenger_api.send_text_message(
         sender_id,
         "🎥 **Visual Guide: Getting Your Canvas Token**\n\n"
+        "📹 *Note: Video tutorial coming soon! For now, follow these detailed steps:*\n\n"
         "Follow these steps carefully:"
     )
     
