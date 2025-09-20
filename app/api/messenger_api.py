@@ -396,25 +396,29 @@ def send_privacy_policy_consent(recipient_id: str) -> bool:
         "I help students stay organized with assignments, deadlines, and study planning."
     )
     
-    # First, introduce and then send a follow-up message with features
+    # First, introduce the bot
     send_text_message(recipient_id, text)
     
+    # Send a separate message with features
     features_text = (
         "Here are my features:\n\n"
-        "Free:\n"
+        "🔥 Free Features:\n"
         "• View tasks due Today/This Week/Overdue\n"
         "• Basic Canvas sync (import assignments)\n"
         "• Add manual tasks (limited)\n"
         "• Reminders and quick actions\n\n"
         "If you choose to upgrade, please message Kean Rosales, or facebook.com/keanlouis30\n\n"
-        "Premium:\n"
+        "💎 Premium Features:\n"
         "• Enhanced reminders (multiple alerts)\n"
         "• Unlimited manual tasks\n"
         "• AI-powered study planning\n"
-        "• Weekly digest reports\n\n"
-        "🔒 To get started, please review our Privacy Policy to understand how we protect your data."
+        "• Weekly digest reports"
     )
     send_text_message(recipient_id, features_text)
+    
+    # Third message with privacy policy prompt
+    privacy_text = "🔒 To get started, please review our Privacy Policy to understand how we protect your data."
+    send_text_message(recipient_id, privacy_text)
     
     # Create URL quick reply that opens privacy policy directly
     quick_replies = [

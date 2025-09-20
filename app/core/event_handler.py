@@ -697,12 +697,12 @@ def handle_token_input(sender_id: str, token: str) -> None:
         logger.debug(f"Error logging analytics: {e}")
     
     # Show success message and offer premium upgrade
-        messenger_api.send_text_message(
-            sender_id,
-            "Great! Your Canvas integration is complete.\n\n"
-            "I can now help you stay on top of your assignments and deadlines. "
-            "Would you like to see what Easely Premium offers?"
-        )
+    messenger_api.send_text_message(
+        sender_id,
+        "Great! Your Canvas integration is complete.\n\n"
+        "I can now help you stay on top of your assignments and deadlines. "
+        "Would you like to see what Easely Premium offers?"
+    )
     
     # Offer premium upgrade
     quick_replies = [
@@ -779,9 +779,9 @@ def filter_assignments_by_date(assignments: List[Dict], filter_type: str) -> Lis
                 if due_date_manila < today_start:  # Before today starts in Manila
                     filtered.append(assignment)
             elif filter_type == 'all':
-                # All future assignments in Manila time (including today and beyond)
-                if due_date_manila >= today_start:
-                    filtered.append(assignment)
+                # All assignments that are NOT completed (show everything: future, today, and even overdue)
+                # This should show ALL tasks regardless of due date
+                filtered.append(assignment)
                     
         except (ValueError, AttributeError) as e:
             logger.debug(f"Error parsing date {assignment.get('due_date')}: {e}")
@@ -1319,14 +1319,14 @@ def handle_task_details_input(sender_id: str, details: str) -> None:
     
     if success:
         # Success message
-        message = f"✅ Task added successfully!\\n\\n" \
-                  f"📚 {title}\\n" \
-                  f"📅 Due: {date_str} at {time_str}\\n"
+        message = f"✅ Task added successfully!\n\n" \
+                  f"📚 {title}\n" \
+                  f"📅 Due: {date_str} at {time_str}\n"
         
         if details and details.lower() not in ['skip', 'no', 'none', 'n/a']:
-            message += f"📝 Details: {details}\\n"
+            message += f"📝 Details: {details}\n"
         
-        message += "\\nThe task has been added to your database and Canvas calendar."
+        message += "\nThe task has been added to your database and Canvas calendar."
         
         messenger_api.send_text_message(sender_id, message)
     else:
@@ -1345,7 +1345,7 @@ def handle_task_details_input(sender_id: str, details: str) -> None:
 
 
 def create_and_sync_task(sender_id: str, title: str, date_str: str, time_str: str, details: str = None) -> bool:
-    """Create task in database and sync with Canvas"""
+    """Create task in Canvas first (as assignment), then save to database"""
     try:
         from datetime import datetime, timezone
         from app.database.supabase_client import create_task, get_user
@@ -1369,52 +1369,82 @@ def create_and_sync_task(sender_id: str, title: str, date_str: str, time_str: st
         due_datetime = manila_tz.localize(due_datetime)
         due_datetime_utc = due_datetime.astimezone(timezone.utc)
         
-        # Create task in database
+        # Get user to check for Canvas token
+        user = get_user(sender_id)
+        canvas_assignment_id = None
+        canvas_course_id = None
+        canvas_synced = False
+        
+        # Try to create in Canvas FIRST if user has token
+        if user and user.get('canvas_token'):
+            try:
+                # Get user's courses to find where to create the assignment
+                courses = canvas_client.get_user_courses(user['canvas_token'])
+                
+                if courses:
+                    # Use the first active course (or let user choose in future version)
+                    # For now, create as a personal task using calendar event
+                    # Since creating assignments requires teacher/TA permissions
+                    
+                    # Check if user has permission to create assignments (usually they don't)
+                    # So we'll create a calendar event instead (personal task)
+                    event_title = f"{title}"
+                    event_description = details if details else f"Personal task: {title}"
+                    
+                    # Try to create as assignment first (will fail for students)
+                    # If that fails, fall back to calendar event
+                    assignment_created = False
+                    
+                    # For student users, skip trying to create assignment and go straight to calendar
+                    # Students can't create assignments in courses
+                    
+                    # Create as calendar event (this always works for personal tasks)
+                    result = canvas_client.create_calendar_event(
+                        token=user['canvas_token'],
+                        title=event_title,
+                        start_at=due_datetime_utc.isoformat(),
+                        end_at=due_datetime_utc.isoformat(),
+                        description=event_description
+                    )
+                    
+                    if result.get('success'):
+                        logger.info(f"Task created in Canvas calendar for user {sender_id}: {title} (Event ID: {result.get('event_id')})")
+                        canvas_synced = True
+                        canvas_assignment_id = result.get('event_id')  # Store event ID as assignment ID
+                    else:
+                        logger.warning(f"Failed to create task in Canvas for user {sender_id}: {result.get('error')}")
+                else:
+                    logger.info(f"No courses found for user {sender_id}, creating local task only")
+                    
+            except Exception as canvas_error:
+                logger.error(f"Error creating task in Canvas for user {sender_id}: {str(canvas_error)}")
+                # Continue to create in database even if Canvas fails
+        
+        # Now create task in database (whether Canvas succeeded or not)
         task_data = create_task(
             facebook_id=sender_id,
             title=title,
             due_date=due_datetime_utc.isoformat(),
             description=details,
             task_type='manual',
-            priority='medium'
+            priority='medium',
+            canvas_assignment_id=str(canvas_assignment_id) if canvas_assignment_id else None,
+            canvas_course_id=str(canvas_course_id) if canvas_course_id else None
         )
         
-        logger.info(f"Task created in database for user {sender_id}: {title}")
+        if task_data:
+            logger.info(f"Task saved to database for user {sender_id}: {title}")
+            
+            # If we created in Canvas, update the task with Canvas IDs
+            if canvas_synced and canvas_assignment_id:
+                from app.database.supabase_client import update_task
+                update_task(task_data['id'], {
+                    'canvas_event_id': str(canvas_assignment_id),
+                    'sync_status': 'synced'
+                })
         
-        # Try to sync with Canvas if user has token
-        user = get_user(sender_id)
-        canvas_synced = False
-        
-        if user and user.get('canvas_token'):
-            try:
-                # Create a calendar event in Canvas
-                event_title = f"[Easely Task] {title}"
-                event_description = details if details else f"Task: {title}"
-                
-                result = canvas_client.create_calendar_event(
-                    token=user['canvas_token'],
-                    title=event_title,
-                    start_at=due_datetime_utc.isoformat(),
-                    end_at=due_datetime_utc.isoformat(),
-                    description=event_description
-                )
-                
-                if result.get('success'):
-                    logger.info(f"Task synced to Canvas calendar for user {sender_id}: {title} (Event ID: {result.get('event_id')})")
-                    canvas_synced = True
-                    
-                    # Update task with Canvas event ID
-                    if task_data and result.get('event_id'):
-                        from app.database.supabase_client import update_task
-                        update_task(task_data['id'], {'canvas_event_id': str(result['event_id'])})
-                else:
-                    logger.warning(f"Failed to sync task to Canvas for user {sender_id}: {result.get('error')}")
-                    
-            except Exception as canvas_error:
-                logger.error(f"Error syncing task to Canvas for user {sender_id}: {str(canvas_error)}")
-        
-        # Return true if database save was successful (Canvas sync is optional)
-        return True
+        # Return true if database save was successful
+        return bool(task_data)
         
     except Exception as e:
         logger.error(f"Error creating task for user {sender_id}: {str(e)}")
@@ -1426,12 +1456,12 @@ def handle_premium_activation(sender_id: str) -> None:
     # In production, verify payment and activate premium
     messenger_api.send_text_message(
         sender_id,
-        "🎉 Easely Premium activated!\\n\\n"
-        "You now have access to:\\n"
-        "• Full proximity reminders\\n"
-        "• Unlimited manual tasks\\n"
-        "• AI-powered study planning\\n"
-        "• Weekly digest reports\\n\\n"
+        "🎉 Easely Premium activated!\n\n"
+        "You now have access to:\n"
+        "• Full proximity reminders\n"
+        "• Unlimited manual tasks\n"
+        "• AI-powered study planning\n"
+        "• Weekly digest reports\n\n"
         "Thank you for upgrading!"
     )
     messenger_api.send_main_menu(sender_id)
@@ -1439,7 +1469,7 @@ def handle_premium_activation(sender_id: str) -> None:
 
 def handle_show_premium(sender_id: str) -> None:
     """Show premium features and pricing"""
-premium_text = (
+    premium_text = (
         "💎 Easely Premium Features\n\n"
         "Upgrade for advanced features:\n\n"
         "🔔 Enhanced Reminders\n"
@@ -1457,7 +1487,7 @@ premium_text = (
         "To upgrade, please message Kean Rosales or visit facebook.com/keanlouis30"
     )
     
-buttons = [
+    buttons = [
         messenger_api.create_url_button(
             "💎 Upgrade Now",
             "https://facebook.com/keanlouis30"

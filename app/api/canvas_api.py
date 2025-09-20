@@ -251,6 +251,83 @@ class CanvasAPIClient:
             logger.error(f"Error fetching upcoming assignments: {str(e)}")
             return []
     
+    def create_assignment(self, token: str, course_id: int, title: str, due_at: str, description: str = None, points_possible: int = None, submission_types: List[str] = None) -> Dict[str, Any]:
+        """
+        Create an assignment in a Canvas course
+        
+        Args:
+            token: Canvas access token
+            course_id: Course ID to create assignment in
+            title: Assignment name
+            due_at: Due date in ISO format
+            description: Assignment description (optional)
+            points_possible: Points for the assignment (optional)
+            submission_types: List of submission types (optional)
+            
+        Returns:
+            Created assignment data or error dict
+        """
+        try:
+            # Prepare assignment data
+            assignment_data = {
+                'assignment': {
+                    'name': title,
+                    'due_at': due_at,
+                    'published': True  # Publish immediately
+                }
+            }
+            
+            if description:
+                assignment_data['assignment']['description'] = description
+            
+            if points_possible is not None:
+                assignment_data['assignment']['points_possible'] = points_possible
+                
+            if submission_types:
+                assignment_data['assignment']['submission_types'] = submission_types
+            else:
+                # Default to online text entry
+                assignment_data['assignment']['submission_types'] = ['online_text_entry']
+            
+            # Make POST request to create assignment
+            url = f"{self.base_url}/api/{self.api_version}/courses/{course_id}/assignments"
+            headers = {
+                'Authorization': f'Bearer {token}',
+                'Content-Type': 'application/json'
+            }
+            
+            response = requests.post(
+                url=url,
+                headers=headers,
+                json=assignment_data,
+                timeout=10
+            )
+            
+            if response.status_code in [200, 201]:
+                assignment = response.json()
+                logger.info(f"Created Canvas assignment: {title} in course {course_id}")
+                return {
+                    'success': True,
+                    'assignment_id': assignment.get('id'),
+                    'title': assignment.get('name'),
+                    'due_at': assignment.get('due_at'),
+                    'html_url': assignment.get('html_url'),
+                    'course_id': course_id
+                }
+            else:
+                logger.error(f"Failed to create assignment: {response.status_code} - {response.text}")
+                return {
+                    'success': False,
+                    'error': f"Canvas API error: {response.status_code} - {response.text}"
+                }
+                
+        except Exception as e:
+            logger.error(f"Error creating assignment: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
     def create_calendar_event(self, token: str, title: str, start_at: str, end_at: str = None, description: str = None) -> Dict[str, Any]:
         """
         Create a calendar event in Canvas (user's personal calendar)
