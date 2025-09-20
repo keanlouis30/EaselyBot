@@ -409,11 +409,42 @@ def handle_token_need_help(sender_id: str) -> None:
 
 
 def handle_watch_video(sender_id: str) -> None:
-    """Send video tutorial - try video first, fallback to instructions"""
+    """Send video tutorial - try URL-based video first, fallback to instructions"""
     import os
     
-    # Try to send the video if we're in local environment
-    if os.environ.get('APP_ENV') != 'production':
+    # Check if we have a video URL configured (for production)
+    VIDEO_URL = os.environ.get('VIDEO_TUTORIAL_URL')
+    
+    # If we have a video URL, use the template approach
+    if VIDEO_URL:
+        messenger_api.send_text_message(
+            sender_id,
+            "🎥 Here's a video tutorial showing how to generate your Canvas token:"
+        )
+        
+        # Send video using template (works with any hosted video)
+        success = messenger_api.send_video_url_template(
+            sender_id,
+            video_url=VIDEO_URL,
+            title="Canvas Token Tutorial",
+            subtitle="Step-by-step guide (3 minutes)"
+        )
+        
+        if success:
+            # After video, ask if they're ready
+            quick_replies = [
+                messenger_api.create_quick_reply("🔑 I have my token", "TOKEN_READY"),
+                messenger_api.create_quick_reply("🔄 Show steps again", "TOKEN_NEED_HELP")
+            ]
+            messenger_api.send_quick_replies(
+                sender_id,
+                "After watching the video, do you have your token ready?",
+                quick_replies
+            )
+            return
+    
+    # Try local file for development
+    elif os.environ.get('APP_ENV') != 'production':
         # Try to send actual video file
         video_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "test.mkv")
         if os.path.exists(video_path):

@@ -697,6 +697,69 @@ def send_video_fallback_message(recipient_id: str) -> bool:
     return send_text_message(recipient_id, fallback_text)
 
 
+def send_video_url_template(recipient_id: str, video_url: str, title: str = None, subtitle: str = None, thumbnail_url: str = None) -> bool:
+    """
+    Send a video using generic template with URL (works with hosted videos)
+    
+    Args:
+        recipient_id: Facebook user ID
+        video_url: URL to the video (must be HTTPS)
+        title: Optional title for the video
+        subtitle: Optional subtitle/description
+        thumbnail_url: Optional thumbnail image URL
+    
+    Returns:
+        bool: True if message sent successfully
+    """
+    message_data = {
+        "attachment": {
+            "type": "template",
+            "payload": {
+                "template_type": "generic",
+                "elements": [{
+                    "title": title or "Canvas Token Tutorial",
+                    "subtitle": subtitle or "Click to watch the step-by-step video guide",
+                    "image_url": thumbnail_url or "https://via.placeholder.com/1280x720/4267B2/ffffff?text=Video+Tutorial",
+                    "default_action": {
+                        "type": "web_url",
+                        "url": video_url,
+                        "webview_height_ratio": "tall"
+                    },
+                    "buttons": [{
+                        "type": "web_url",
+                        "url": video_url,
+                        "title": "▶️ Watch Video"
+                    }]
+                }]
+            }
+        }
+    }
+    return send_message(recipient_id, message_data)
+
+
+def send_video_attachment_url(recipient_id: str, video_url: str) -> bool:
+    """
+    Send video as direct attachment from URL (requires MP4 format)
+    
+    Args:
+        recipient_id: Facebook user ID
+        video_url: Direct URL to MP4 video file (must be HTTPS)
+    
+    Returns:
+        bool: True if sent successfully
+    """
+    message_data = {
+        "attachment": {
+            "type": "video",
+            "payload": {
+                "url": video_url,
+                "is_reusable": True
+            }
+        }
+    }
+    return send_message(recipient_id, message_data)
+
+
 # Keep old function for backward compatibility
 def send_token_request(recipient_id: str) -> bool:
     """Backward compatibility wrapper for Canvas token request"""
