@@ -914,12 +914,16 @@ def handle_get_tasks_today(sender_id: str) -> None:
             )
             return
         
-        # Show typing indicator
+        # Show typing indicator and syncing message
         messenger_api.send_typing_indicator(sender_id, "typing_on")
+        messenger_api.send_text_message(
+            sender_id,
+            "🔄 Checking Canvas for today's assignments..."
+        )
         
-        # ALWAYS get assignments from database (never hit Canvas API here)
+        # FORCE REFRESH from Canvas API to get latest assignments
         from app.database.supabase_client import sync_canvas_assignments
-        assignments = sync_canvas_assignments(sender_id, token, force_refresh=False)
+        assignments = sync_canvas_assignments(sender_id, token, force_refresh=True)
         
         # Filter for today
         today_assignments = filter_assignments_by_date(assignments, 'today')
@@ -954,12 +958,16 @@ def handle_get_tasks_week(sender_id: str) -> None:
             )
             return
         
-        # Show typing indicator
+        # Show typing indicator and syncing message
         messenger_api.send_typing_indicator(sender_id, "typing_on")
+        messenger_api.send_text_message(
+            sender_id,
+            "🔄 Checking Canvas for this week's assignments..."
+        )
         
-        # ALWAYS get assignments from database (never hit Canvas API here)
+        # FORCE REFRESH from Canvas API to get latest assignments
         from app.database.supabase_client import sync_canvas_assignments
-        assignments = sync_canvas_assignments(sender_id, token, force_refresh=False)
+        assignments = sync_canvas_assignments(sender_id, token, force_refresh=True)
         
         # Filter for this week
         week_assignments = filter_assignments_by_date(assignments, 'week')
@@ -994,12 +1002,16 @@ def handle_get_tasks_overdue(sender_id: str) -> None:
             )
             return
         
-        # Show typing indicator
+        # Show typing indicator and syncing message
         messenger_api.send_typing_indicator(sender_id, "typing_on")
+        messenger_api.send_text_message(
+            sender_id,
+            "🔄 Checking Canvas for overdue assignments..."
+        )
         
-        # ALWAYS get assignments from database (never hit Canvas API here)
+        # FORCE REFRESH from Canvas API to get latest assignments
         from app.database.supabase_client import sync_canvas_assignments
-        assignments = sync_canvas_assignments(sender_id, token, force_refresh=False)
+        assignments = sync_canvas_assignments(sender_id, token, force_refresh=True)
         
         # Filter for overdue
         overdue_assignments = filter_assignments_by_date(assignments, 'overdue')
@@ -1034,15 +1046,23 @@ def handle_get_tasks_all(sender_id: str) -> None:
             )
             return
         
-        # Show typing indicator
+        # Show typing indicator and syncing message
         messenger_api.send_typing_indicator(sender_id, "typing_on")
+        messenger_api.send_text_message(
+            sender_id,
+            "🔄 Fetching latest assignments from Canvas..."
+        )
         
-        # Get assignments from cache or Canvas API
+        # FORCE REFRESH from Canvas API to get ALL latest assignments
         from app.database.supabase_client import sync_canvas_assignments
-        assignments = sync_canvas_assignments(sender_id, token)
+        assignments = sync_canvas_assignments(sender_id, token, force_refresh=True)
+        
+        logger.info(f"Fetched {len(assignments) if assignments else 0} total assignments from Canvas for user {sender_id}")
         
         # Filter for all upcoming (future assignments from today onwards)
         upcoming_assignments = filter_assignments_by_date(assignments, 'all')
+        
+        logger.info(f"After filtering, showing {len(upcoming_assignments) if upcoming_assignments else 0} upcoming assignments")
         
         # Send assignments individually
         send_assignments_individually(sender_id, upcoming_assignments, "📅 Upcoming Tasks")
