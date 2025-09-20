@@ -158,6 +158,9 @@ def setup_bot():
         }), 500
 
 
+# Store recently processed message IDs to prevent duplicates
+processed_message_ids = set()
+
 def process_message_event(event):
     """
     Process individual message events from the webhook with comprehensive logging
@@ -171,6 +174,18 @@ def process_message_event(event):
     event_type = "unknown"
     processing_status = "success"
     error_message = None
+    
+    # Check for message ID to prevent duplicate processing
+    message_id = None
+    if 'message' in event and 'mid' in event['message']:
+        message_id = event['message']['mid']
+        if message_id in processed_message_ids:
+            logger.debug(f"Skipping duplicate message {message_id}")
+            return
+        processed_message_ids.add(message_id)
+        # Keep only last 1000 message IDs to prevent memory issues
+        if len(processed_message_ids) > 1000:
+            processed_message_ids.clear()
     
     try:
         sender_id = event.get('sender', {}).get('id')

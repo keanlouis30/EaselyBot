@@ -639,7 +639,12 @@ def filter_assignments_by_date(assignments: List[Dict], filter_type: str) -> Lis
     # Calculate date boundaries in Manila timezone
     today_start = now_manila.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = now_manila.replace(hour=23, minute=59, second=59, microsecond=999999)
-    week_end = today_start + timedelta(days=7)
+    
+    # Calculate end of this week (Sunday at 11:59 PM)
+    days_until_sunday = (6 - now_manila.weekday()) % 7  # 6 = Sunday
+    if days_until_sunday == 0 and now_manila.hour >= 0:  # If today is Sunday
+        days_until_sunday = 0  # Include today (Sunday)
+    week_end = today_start + timedelta(days=days_until_sunday, hours=23, minutes=59, seconds=59)
     
     filtered = []
     
@@ -664,7 +669,8 @@ def filter_assignments_by_date(assignments: List[Dict], filter_type: str) -> Lis
                 if today_start <= due_date_manila <= today_end:
                     filtered.append(assignment)
             elif filter_type == 'week':
-                # Only assignments due in the NEXT 7 days (including today but not overdue)
+                # Only assignments from today through Sunday (end of this week)
+                # Make sure it's not overdue (before today) and not after Sunday
                 if today_start <= due_date_manila <= week_end:
                     filtered.append(assignment)
             elif filter_type == 'overdue':
@@ -743,11 +749,6 @@ def send_assignments_individually(sender_id: str, assignments: List[Dict], heade
     """Send assignments - batch them to avoid Facebook's message limits"""
     if not assignments:
         messenger_api.send_text_message(sender_id, f"{header}\n\n✨ No assignments found!")
-        # Add a simple prompt instead of the full menu
-        messenger_api.send_text_message(
-            sender_id, 
-            "Type 'menu' to see other options or ask me anything!"
-        )
         return
     
     # Send header message
@@ -793,11 +794,7 @@ def send_assignments_individually(sender_id: str, assignments: List[Dict], heade
             messenger_api.send_text_message(sender_id, message)
             time.sleep(0.5)  # Small delay to avoid rate limits
     
-    # After showing all tasks, just give a simple prompt
-    messenger_api.send_text_message(
-        sender_id,
-        "\n💡 Type 'menu' for more options or 'help' if you need assistance!"
-    )
+    # Don't send any additional prompt - users can use the burger menu
 
 def handle_get_tasks_today(sender_id: str) -> None:
     """Show tasks due today"""
