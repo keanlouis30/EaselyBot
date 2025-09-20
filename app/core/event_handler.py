@@ -486,7 +486,7 @@ def handle_watch_video(sender_id: str) -> None:
         "💡 **Pro Tip:** Keep the Canvas settings page open in another tab while you paste the token here!"
     )
     
-    # After video, ask if they're ready
+    # After instructions, ask if they're ready
     quick_replies = [
         messenger_api.create_quick_reply("🔑 I have my token", "TOKEN_READY"),
         messenger_api.create_quick_reply("🔄 Show steps again", "TOKEN_NEED_HELP")
@@ -494,7 +494,7 @@ def handle_watch_video(sender_id: str) -> None:
     
     messenger_api.send_quick_replies(
         sender_id,
-        "After watching the video, do you have your token ready?",
+        "Do you have your Canvas token ready now?",
         quick_replies
     )
 
