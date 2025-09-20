@@ -132,14 +132,14 @@ def send_main_menu(recipient_id: str) -> bool:
     Returns:
         bool: True if menu sent successfully
     """
-    text = "🎯 Welcome to Easely! What would you like to do?"
+    text = "Welcome to Easely! What would you like to do?"
     
     quick_replies = [
-        create_quick_reply("🔥 Due Today", "GET_TASKS_TODAY"),
-        create_quick_reply("⏰ This Week", "GET_TASKS_WEEK"),
-        create_quick_reply("❗️ Overdue", "GET_TASKS_OVERDUE"),
-        create_quick_reply("🗓 View All", "GET_TASKS_ALL"),
-        create_quick_reply("➕ Add Task", "ADD_NEW_TASK")
+        create_quick_reply("Due Today", "GET_TASKS_TODAY"),
+        create_quick_reply("This Week", "GET_TASKS_WEEK"),
+        create_quick_reply("Overdue", "GET_TASKS_OVERDUE"),
+        create_quick_reply("View All", "GET_TASKS_ALL"),
+        create_quick_reply("Add Task", "ADD_NEW_TASK")
     ]
     
     return send_quick_replies(recipient_id, text, quick_replies)
@@ -165,17 +165,17 @@ def setup_persistent_menu() -> bool:
                     "composer_input_disabled": False,
                     "call_to_actions": [
                         {
-                            "title": "📚 My Tasks",
+                            "title": "My Tasks",
                             "type": "postback",
                             "payload": "MAIN_MENU"
                         },
                         {
-                            "title": "🔗 Canvas Setup",
+                            "title": "Canvas Setup",
                             "type": "postback",
                             "payload": "TOKEN_TUTORIAL"
                         },
                         {
-                            "title": "❓ Help & Support",
+                            "title": "Help & Support",
                             "type": "postback",
                             "payload": "SHOW_HELP"
                         }

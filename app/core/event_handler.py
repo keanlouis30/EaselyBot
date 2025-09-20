@@ -381,24 +381,24 @@ def handle_token_know_how(sender_id: str) -> None:
 def handle_token_need_help(sender_id: str) -> None:
     """Handle user who needs help generating token"""
     instructions = (
-        "📚 Here's how to get your Canvas Access Token:\n\n"
-        "1️⃣ Log into your Canvas account\n"
-        "2️⃣ Click on Account → Settings\n"
-        "3️⃣ Scroll down to 'Approved Integrations'\n"
-        "4️⃣ Click '+ New Access Token'\n"
-        "5️⃣ Enter 'Easely Bot' as the purpose\n"
-        "6️⃣ Leave expiry date blank (never expires)\n"
-        "7️⃣ Click 'Generate Token'\n"
-        "8️⃣ Copy the token immediately\n\n"
-        "⚠️ IMPORTANT: Save the token before closing the dialog - you won't see it again!"
+        "Here's how to get your Canvas Access Token:\n\n"
+        "1. Log into your Canvas account\n"
+        "2. Click on Account → Settings\n"
+        "3. Scroll down to 'Approved Integrations'\n"
+        "4. Click '+ New Access Token'\n"
+        "5. Enter 'Easely Bot' as the purpose\n"
+        "6. Leave expiry date blank (never expires)\n"
+        "7. Click 'Generate Token'\n"
+        "8. Copy the token immediately\n\n"
+        "IMPORTANT: Save the token before closing the dialog - you won't see it again!"
     )
     
     messenger_api.send_text_message(sender_id, instructions)
     
     # Ask if they want video or are ready
     quick_replies = [
-        messenger_api.create_quick_reply("🎥 Watch Video", "WATCH_VIDEO"),
-        messenger_api.create_quick_reply("🔑 I have my token", "TOKEN_READY")
+        messenger_api.create_quick_reply("Watch Video", "WATCH_VIDEO"),
+        messenger_api.create_quick_reply("I have my token", "TOKEN_READY")
     ]
     
     messenger_api.send_quick_replies(
@@ -419,7 +419,7 @@ def handle_watch_video(sender_id: str) -> None:
     if VIDEO_URL:
         messenger_api.send_text_message(
             sender_id,
-            "🎥 Here's a video tutorial showing how to generate your Canvas token:"
+            "Here's a video tutorial showing how to generate your Canvas token:"
         )
         
         # Send video using template (works with any hosted video)
@@ -427,7 +427,7 @@ def handle_watch_video(sender_id: str) -> None:
             sender_id,
             video_url=VIDEO_URL,
             title="Canvas Token Tutorial",
-            subtitle="Step-by-step guide (3 minutes)"
+            subtitle="Quick visual guide"
         )
         
         if success:
@@ -469,40 +469,39 @@ def handle_watch_video(sender_id: str) -> None:
     # For production or if video fails, provide detailed instructions with images
     messenger_api.send_text_message(
         sender_id,
-        "🎥 **Visual Guide: Getting Your Canvas Token**\n\n"
-        "📹 *Note: Video tutorial coming soon! For now, follow these detailed steps:*\n\n"
+        "**Canvas Token Setup Guide**\n\n"
         "Follow these steps carefully:"
     )
     
     # Send step-by-step with better formatting
     steps = [
         (
-            "🔵 **Step 1: Open Canvas Settings**\n"
+            "**Step 1: Open Canvas Settings**\n"
             "1. Log into Canvas\n"
             "2. Click your profile picture (top-left)\n"
             "3. Select 'Account'\n"
             "4. Click 'Settings'"
         ),
         (
-            "🔵 **Step 2: Find Integrations**\n"
+            "**Step 2: Find Integrations**\n"
             "Scroll down to find 'Approved Integrations' section\n"
             "(It's usually near the bottom of the page)"
         ),
         (
-            "🔵 **Step 3: Create New Token**\n"
+            "**Step 3: Create New Token**\n"
             "Click the '+ New Access Token' button"
         ),
         (
-            "🔵 **Step 4: Configure Your Token**\n"
+            "**Step 4: Configure Your Token**\n"
             "Purpose: Enter 'Easely Bot'\n"
             "Expires: Leave blank (recommended)\n"
             "Click 'Generate Token'"
         ),
         (
-            "⚠️ **CRITICAL: Copy Your Token!**\n"
-            "🔴 COPY THE TOKEN IMMEDIATELY\n"
-            "🔴 You won't see it again!\n"
-            "🔴 It looks like: 1234~ABcd5678..."
+            "**IMPORTANT: Copy Your Token!**\n"
+            "- COPY THE TOKEN IMMEDIATELY\n"
+            "- You won't see it again!\n"
+            "- It looks like: 1234~ABcd5678..."
         )
     ]
     
@@ -515,13 +514,13 @@ def handle_watch_video(sender_id: str) -> None:
     # Offer alternative help
     messenger_api.send_text_message(
         sender_id,
-        "💡 **Pro Tip:** Keep the Canvas settings page open in another tab while you paste the token here!"
+        "**Tip:** Keep the Canvas settings page open in another tab while you paste the token here."
     )
     
     # After instructions, ask if they're ready
     quick_replies = [
-        messenger_api.create_quick_reply("🔑 I have my token", "TOKEN_READY"),
-        messenger_api.create_quick_reply("🔄 Show steps again", "TOKEN_NEED_HELP")
+        messenger_api.create_quick_reply("I have my token", "TOKEN_READY"),
+        messenger_api.create_quick_reply("Show steps again", "TOKEN_NEED_HELP")
     ]
     
     messenger_api.send_quick_replies(
@@ -536,9 +535,9 @@ def handle_token_ready(sender_id: str) -> None:
     set_user_state(sender_id, "waiting_for_token", "user_clicked_token_ready")
     messenger_api.send_text_message(
         sender_id,
-        "🔑 Excellent! Please paste your Canvas Access Token here:\n\n"
+        "Great! Please paste your Canvas Access Token here:\n\n"
         "It should look something like: 1234~abcd1234efgh5678...\n\n"
-        "🔒 Your token will be encrypted and stored securely."
+        "Your token will be encrypted and stored securely."
     )
 
 def handle_token_tutorial(sender_id: str) -> None:
@@ -588,7 +587,7 @@ def handle_token_input(sender_id: str, token: str) -> None:
     # If token looks reasonable, process it
     messenger_api.send_text_message(
         sender_id,
-        "✅ Token received! Validating with Canvas..."
+        "Token received. Validating with Canvas..."
     )
     
     # Validate token with real Canvas API
@@ -615,7 +614,7 @@ def handle_token_input(sender_id: str, token: str) -> None:
         
         messenger_api.send_text_message(
             sender_id,
-            f"✅ Token verified! Welcome {user_name}! Syncing your Canvas data..."
+            f"Token verified! Welcome {user_name}! Syncing your Canvas data..."
         )
         
         # Fetch and cache assignments from Canvas
@@ -624,7 +623,7 @@ def handle_token_input(sender_id: str, token: str) -> None:
         
         if assignments:
             # Format and show real assignments
-            tasks_text = "📚 Your upcoming assignments:\n\n"
+            tasks_text = "Your upcoming assignments:\n\n"
             for i, assignment in enumerate(assignments[:3], 1):
                 from datetime import datetime
                 try:
@@ -694,12 +693,12 @@ def handle_token_input(sender_id: str, token: str) -> None:
         logger.debug(f"Error logging analytics: {e}")
     
     # Show success message and offer premium upgrade
-    messenger_api.send_text_message(
-        sender_id,
-        "🎉 Awesome! Your Canvas integration is complete!\n\n"
-        "I can now help you stay on top of your assignments and deadlines. "
-        "Would you like to see what Easely Premium offers?"
-    )
+        messenger_api.send_text_message(
+            sender_id,
+            "Great! Your Canvas integration is complete.\n\n"
+            "I can now help you stay on top of your assignments and deadlines. "
+            "Would you like to see what Easely Premium offers?"
+        )
     
     # Offer premium upgrade
     quick_replies = [
