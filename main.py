@@ -158,6 +158,106 @@ def setup_bot():
         }), 500
 
 
+@app.route('/broadcast', methods=['POST'])
+def broadcast_message():
+    """
+    Broadcast a message to multiple recipients
+    Expects JSON payload with: title, message, recipients
+    Returns success/failure counts
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            logger.warning("Received empty broadcast request")
+            return jsonify({
+                "error": "No data provided"
+            }), 400
+        
+        # Validate required fields
+        title = data.get('title', '')
+        message = data.get('message', '')
+        recipients = data.get('recipients', [])
+        
+        if not message:
+            return jsonify({
+                "error": "Message is required"
+            }), 400
+        
+        if not recipients or not isinstance(recipients, list):
+            return jsonify({
+                "error": "Recipients list is required"
+            }), 400
+        
+        logger.info(f"Broadcasting message to {len(recipients)} recipients")
+        logger.debug(f"Broadcast title: {title}")
+        logger.debug(f"Broadcast message: {message[:100]}...")  # Log first 100 chars
+        
+        # Format the full message
+        if title:
+            full_message = f"📢 {title}\n\n{message}"
+        else:
+            full_message = message
+        
+        # Initialize counters
+        success_count = 0
+        fail_count = 0
+        failed_recipients = []
+        
+        # Import the send function
+        from app.api.messenger_api import send_text_message
+        
+        # Send message to each recipient
+        for recipient_id in recipients:
+            try:
+                # Validate recipient ID format (should be a string of digits)
+                if not isinstance(recipient_id, str) or not recipient_id.isdigit():
+                    logger.warning(f"Invalid recipient ID format: {recipient_id}")
+                    fail_count += 1
+                    failed_recipients.append(recipient_id)
+                    continue
+                
+                # Send the message
+                success = send_text_message(recipient_id, full_message)
+                
+                if success:
+                    success_count += 1
+                    logger.debug(f"Message sent successfully to {recipient_id}")
+                else:
+                    fail_count += 1
+                    failed_recipients.append(recipient_id)
+                    logger.warning(f"Failed to send message to {recipient_id}")
+                    
+            except Exception as e:
+                fail_count += 1
+                failed_recipients.append(recipient_id)
+                logger.error(f"Error sending to {recipient_id}: {str(e)}")
+        
+        # Log broadcast results
+        logger.info(f"Broadcast completed: {success_count} successful, {fail_count} failed")
+        
+        # Prepare response
+        response_data = {
+            "successful": success_count,
+            "failed": fail_count,
+            "total_recipients": len(recipients)
+        }
+        
+        # Include failed recipients in response if any (for debugging)
+        if failed_recipients:
+            response_data["failed_recipients"] = failed_recipients[:10]  # Limit to first 10
+        
+        return jsonify(response_data), 200
+        
+    except Exception as e:
+        logger.error(f"Error in broadcast endpoint: {str(e)}")
+        return jsonify({
+            "error": f"Broadcast failed: {str(e)}",
+            "successful": 0,
+            "failed": 0
+        }), 500
+
+
 # Store recently processed message IDs to prevent duplicates
 processed_message_ids = set()
 
