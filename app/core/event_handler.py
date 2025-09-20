@@ -621,9 +621,9 @@ def handle_token_input(sender_id: str, token: str) -> None:
             f"Token verified! Welcome {user_name}! Syncing your Canvas data..."
         )
         
-        # Fetch and cache assignments from Canvas
-        from app.database.supabase_client import sync_canvas_assignments
-        assignments = sync_canvas_assignments(sender_id, token, force_refresh=True)
+        # Fetch assignments directly from Canvas (no database caching)
+        from app.api.canvas_api import canvas_client
+        assignments = canvas_client.get_assignments(token, limit=10)  # Get first 10 for preview
         
         if assignments:
             # Format and show real assignments
@@ -730,8 +730,50 @@ def get_user_canvas_token(sender_id: str) -> Optional[str]:
         logger.error(f"Error getting Canvas token for user {sender_id}: {str(e)}")
         return None
 
-def filter_assignments_by_date(assignments: List[Dict], filter_type: str) -> List[Dict]:
-    """Filter assignments by date criteria and exclude completed tasks"""
+def fetch_and_filter_canvas_assignments(token: str, filter_type: str) -> List[Dict]:
+    """Fetch assignments directly from Canvas API and filter by date
+    
+    Args:
+        token: Canvas API token
+        filter_type: Type of filter ('today', 'week', 'overdue', 'all')
+        
+    Returns:
+        List of filtered assignments
+    """
+    try:
+        from app.api.canvas_api import canvas_client
+        
+        # Fetch ALL assignments directly from Canvas with pagination
+        logger.info(f"Fetching assignments directly from Canvas API for filter: {filter_type}")
+        
+        # Get assignments with no limit to ensure we get everything
+        all_assignments = canvas_client.get_assignments(token, limit=500)
+        
+        if not all_assignments:
+            logger.warning("No assignments fetched from Canvas - user may have no courses or assignments")
+            return []
+        
+        logger.info(f"Successfully fetched {len(all_assignments)} total assignments from Canvas API")
+        
+        # Now apply date filtering
+        filtered = filter_assignments_by_date(all_assignments, filter_type)
+        logger.info(f"After applying '{filter_type}' filter, returning {len(filtered)} assignments")
+        
+        return filtered
+        
+    except Exception as e:
+        logger.error(f"Error fetching assignments from Canvas: {str(e)}")
+        return []
+
+
+def filter_assignments_by_date(assignments: List[Dict], filter_type: str, include_submitted: bool = False) -> List[Dict]:
+    """Filter assignments by date criteria and optionally exclude completed tasks
+    
+    Args:
+        assignments: List of assignments to filter
+        filter_type: Type of date filter ('today', 'week', 'overdue', 'all')
+        include_submitted: Whether to include submitted assignments (default: False)
+    """
     from datetime import datetime, timedelta
     
     # Use Manila timezone for local date/time logic
@@ -754,11 +796,16 @@ def filter_assignments_by_date(assignments: List[Dict], filter_type: str) -> Lis
         if not assignment.get('due_date'):
             continue
             
-        # Skip completed assignments (if status field exists)
-        status = assignment.get('status', '').lower()
-        if status in ['completed', 'done', 'finished', 'submitted']:
-            logger.debug(f"Skipping completed assignment: {assignment.get('title')}")
-            continue
+        # Skip submitted assignments unless explicitly included
+        if not include_submitted:
+            # Check various indicators of submission
+            is_submitted = assignment.get('is_submitted', False)
+            status = assignment.get('status', '').lower()
+            workflow_state = assignment.get('workflow_state', '').lower()
+            
+            if is_submitted or status in ['completed', 'done', 'finished', 'submitted'] or workflow_state in ['submitted', 'graded']:
+                logger.debug(f"Skipping submitted assignment: {assignment.get('title')} (submitted={is_submitted}, status={status}, workflow={workflow_state})")
+                continue
             
         try:
             # Parse due date and convert to Manila timezone for comparison
@@ -918,15 +965,11 @@ def handle_get_tasks_today(sender_id: str) -> None:
         messenger_api.send_typing_indicator(sender_id, "typing_on")
         messenger_api.send_text_message(
             sender_id,
-            "🔄 Checking Canvas for today's assignments..."
+            "🔄 Fetching today's assignments from Canvas..."
         )
         
-        # FORCE REFRESH from Canvas API to get latest assignments
-        from app.database.supabase_client import sync_canvas_assignments
-        assignments = sync_canvas_assignments(sender_id, token, force_refresh=True)
-        
-        # Filter for today
-        today_assignments = filter_assignments_by_date(assignments, 'today')
+        # Fetch directly from Canvas API and filter for today
+        today_assignments = fetch_and_filter_canvas_assignments(token, 'today')
         
         # Send assignments individually
         send_assignments_individually(sender_id, today_assignments, "🔥 Tasks Due Today")
@@ -962,15 +1005,11 @@ def handle_get_tasks_week(sender_id: str) -> None:
         messenger_api.send_typing_indicator(sender_id, "typing_on")
         messenger_api.send_text_message(
             sender_id,
-            "🔄 Checking Canvas for this week's assignments..."
+            "🔄 Fetching this week's assignments from Canvas..."
         )
         
-        # FORCE REFRESH from Canvas API to get latest assignments
-        from app.database.supabase_client import sync_canvas_assignments
-        assignments = sync_canvas_assignments(sender_id, token, force_refresh=True)
-        
-        # Filter for this week
-        week_assignments = filter_assignments_by_date(assignments, 'week')
+        # Fetch directly from Canvas API and filter for this week
+        week_assignments = fetch_and_filter_canvas_assignments(token, 'week')
         
         # Send assignments individually
         send_assignments_individually(sender_id, week_assignments, "⏰ Tasks Due This Week")
@@ -1006,15 +1045,11 @@ def handle_get_tasks_overdue(sender_id: str) -> None:
         messenger_api.send_typing_indicator(sender_id, "typing_on")
         messenger_api.send_text_message(
             sender_id,
-            "🔄 Checking Canvas for overdue assignments..."
+            "🔄 Fetching overdue assignments from Canvas..."
         )
         
-        # FORCE REFRESH from Canvas API to get latest assignments
-        from app.database.supabase_client import sync_canvas_assignments
-        assignments = sync_canvas_assignments(sender_id, token, force_refresh=True)
-        
-        # Filter for overdue
-        overdue_assignments = filter_assignments_by_date(assignments, 'overdue')
+        # Fetch directly from Canvas API and filter for overdue
+        overdue_assignments = fetch_and_filter_canvas_assignments(token, 'overdue')
         
         # Send assignments individually
         send_assignments_individually(sender_id, overdue_assignments, "❗️ Overdue Tasks")
@@ -1050,19 +1085,13 @@ def handle_get_tasks_all(sender_id: str) -> None:
         messenger_api.send_typing_indicator(sender_id, "typing_on")
         messenger_api.send_text_message(
             sender_id,
-            "🔄 Fetching latest assignments from Canvas..."
+            "🔄 Fetching all upcoming assignments from Canvas..."
         )
         
-        # FORCE REFRESH from Canvas API to get ALL latest assignments
-        from app.database.supabase_client import sync_canvas_assignments
-        assignments = sync_canvas_assignments(sender_id, token, force_refresh=True)
+        # Fetch directly from Canvas API and filter for upcoming
+        upcoming_assignments = fetch_and_filter_canvas_assignments(token, 'all')
         
-        logger.info(f"Fetched {len(assignments) if assignments else 0} total assignments from Canvas for user {sender_id}")
-        
-        # Filter for all upcoming (future assignments from today onwards)
-        upcoming_assignments = filter_assignments_by_date(assignments, 'all')
-        
-        logger.info(f"After filtering, showing {len(upcoming_assignments) if upcoming_assignments else 0} upcoming assignments")
+        logger.info(f"After fetching and filtering, showing {len(upcoming_assignments) if upcoming_assignments else 0} upcoming assignments")
         
         # Send assignments individually
         send_assignments_individually(sender_id, upcoming_assignments, "📅 Upcoming Tasks")
@@ -1817,9 +1846,9 @@ def handle_sync_canvas(sender_id: str) -> None:
             "🔄 Syncing with Canvas... This may take a few seconds."
         )
         
-        # Force refresh from Canvas API
-        from app.database.supabase_client import sync_canvas_assignments
-        assignments = sync_canvas_assignments(sender_id, token, force_refresh=True)
+        # Fetch directly from Canvas API (no database caching)
+        from app.api.canvas_api import canvas_client
+        assignments = canvas_client.get_assignments(token, limit=500)
         
         if assignments:
             messenger_api.send_text_message(

@@ -220,12 +220,14 @@ class CanvasAPIClient:
                 logger.debug(f"Fetching assignments for course: {course['name']} ({course['id']})")
                 
                 # Use pagination to get ALL assignments from each course
+                # Include submission data to check if assignments are completed
                 course_assignments = self._make_request(
                     token, 
                     f'courses/{course["id"]}/assignments',
                     params={
                         'per_page': 100,  # Get more assignments per course
-                        'order_by': 'due_at'
+                        'order_by': 'due_at',
+                        'include[]': ['submission']  # Include submission data
                     },
                     paginate=True  # Enable pagination to get ALL assignments
                 )
@@ -236,6 +238,15 @@ class CanvasAPIClient:
                     for assignment in course_assignments:
                         # Only include assignments with due dates
                         if assignment.get('due_at'):
+                            # Check if assignment has submission info
+                            has_submission = assignment.get('has_submitted_submissions', False)
+                            submission = assignment.get('submission', {})
+                            
+                            # Determine if assignment is completed
+                            # Canvas uses 'workflow_state' for submission status
+                            workflow_state = submission.get('workflow_state', '') if isinstance(submission, dict) else ''
+                            is_submitted = workflow_state in ['submitted', 'graded'] or has_submission
+                            
                             assignments.append({
                                 'id': assignment.get('id'),
                                 'title': assignment.get('name'),
@@ -245,7 +256,9 @@ class CanvasAPIClient:
                                 'description': assignment.get('description', ''),
                                 'points_possible': assignment.get('points_possible'),
                                 'submission_types': assignment.get('submission_types', []),
-                                'html_url': assignment.get('html_url')
+                                'html_url': assignment.get('html_url'),
+                                'is_submitted': is_submitted,
+                                'workflow_state': workflow_state
                             })
                         else:
                             logger.debug(f"Skipping assignment '{assignment.get('name')}' - no due date")
