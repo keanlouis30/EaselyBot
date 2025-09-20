@@ -144,7 +144,7 @@ class CanvasAPIClient:
             logger.error(f"Error fetching courses: {str(e)}")
             return []
     
-    def get_assignments(self, token: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def get_assignments(self, token: str, limit: int = 500) -> List[Dict[str, Any]]:
         """
         Get upcoming assignments across all courses
         
@@ -168,14 +168,14 @@ class CanvasAPIClient:
             
             assignments = []
             
-            for course in courses[:10]:  # Limit to first 10 courses to avoid rate limits
+            for course in courses:  # Get ALL courses, not just first 10
                 logger.debug(f"Fetching assignments for course: {course['name']} ({course['id']})")
                 
                 course_assignments = self._make_request(
                     token, 
                     f'courses/{course["id"]}/assignments',
                     params={
-                        'per_page': 50,
+                        'per_page': 100,  # Get more assignments per course
                         'order_by': 'due_at'
                     }
                 )
@@ -230,8 +230,8 @@ class CanvasAPIClient:
             now = datetime.now(timezone.utc)
             cutoff_date = now + timedelta(days=days_ahead)
             
-            # Get ALL assignments, not just 50
-            all_assignments = self.get_assignments(token, limit=200)
+            # Get ALL assignments from ALL courses
+            all_assignments = self.get_assignments(token, limit=500)
             upcoming = []
             
             for assignment in all_assignments:
@@ -269,7 +269,7 @@ def validate_canvas_token(token: str) -> Dict[str, Any]:
     return canvas_client.validate_token(token)
 
 
-def fetch_user_assignments(token: str, limit: int = 200) -> List[Dict[str, Any]]:
+def fetch_user_assignments(token: str, limit: int = 500) -> List[Dict[str, Any]]:
     """
     Convenience function to fetch user assignments
     

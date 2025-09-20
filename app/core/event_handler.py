@@ -815,9 +815,10 @@ def handle_get_tasks_today(sender_id: str) -> None:
         # Show typing indicator
         messenger_api.send_typing_indicator(sender_id, "typing_on")
         
-        # Get assignments from cache or Canvas API
+        # ALWAYS get assignments from database (never hit Canvas API here)
         from app.database.supabase_client import sync_canvas_assignments
-        assignments = sync_canvas_assignments(sender_id, token)
+        assignments = sync_canvas_assignments(sender_id, token, force_refresh=False)
+ments(sender_id, token, force_refresh=False)
         
         # Filter for today
         today_assignments = filter_assignments_by_date(assignments, 'today')
@@ -855,9 +856,9 @@ def handle_get_tasks_week(sender_id: str) -> None:
         # Show typing indicator
         messenger_api.send_typing_indicator(sender_id, "typing_on")
         
-        # Get assignments from cache or Canvas API
+        # ALWAYS get assignments from database (never hit Canvas API here)
         from app.database.supabase_client import sync_canvas_assignments
-        assignments = sync_canvas_assignments(sender_id, token)
+        assignments = sync_canvas_assignments(sender_id, token, force_refresh=False)
         
         # Filter for this week
         week_assignments = filter_assignments_by_date(assignments, 'week')
@@ -895,9 +896,9 @@ def handle_get_tasks_overdue(sender_id: str) -> None:
         # Show typing indicator
         messenger_api.send_typing_indicator(sender_id, "typing_on")
         
-        # Get assignments from cache or Canvas API
+        # ALWAYS get assignments from database (never hit Canvas API here)
         from app.database.supabase_client import sync_canvas_assignments
-        assignments = sync_canvas_assignments(sender_id, token)
+        assignments = sync_canvas_assignments(sender_id, token, force_refresh=False)
         
         # Filter for overdue
         overdue_assignments = filter_assignments_by_date(assignments, 'overdue')

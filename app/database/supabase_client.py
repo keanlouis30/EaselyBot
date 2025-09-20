@@ -372,41 +372,40 @@ def get_cached_canvas_assignments(facebook_id: str) -> List[Dict[str, Any]]:
         logger.error(f"Error fetching cached Canvas assignments for user {facebook_id}: {str(e)}")
         return []
 
-def is_canvas_cache_fresh(facebook_id: str, max_age_hours: int = 2) -> bool:
-    """Check if Canvas cache is fresh enough to use"""
+def has_cached_assignments(facebook_id: str) -> bool:
+    """Check if user has cached assignments in database"""
     try:
-        from datetime import datetime, timezone, timedelta
+        response = supabase_client.client.table('tasks').select('id').eq(
+            'facebook_id', facebook_id
+        ).eq('task_type', 'canvas').limit(1).execute()
         
-        user = get_user(facebook_id)
-        if not user or not user.get('last_canvas_sync'):
-            return False
-        
-        last_sync = datetime.fromisoformat(user['last_canvas_sync'].replace('Z', '+00:00'))
-        max_age = timedelta(hours=max_age_hours)
-        
-        return (datetime.now(timezone.utc) - last_sync) < max_age
+        return bool(response.data)
         
     except Exception as e:
         logger.debug(f"Error checking cache freshness for user {facebook_id}: {str(e)}")
         return False
 
 def sync_canvas_assignments(facebook_id: str, token: str, force_refresh: bool = False) -> List[Dict[str, Any]]:
-    """Sync Canvas assignments with database cache"""
+    """Get Canvas assignments - ALWAYS from database unless initial sync or force refresh"""
     try:
-        logger.info(f"Starting Canvas sync for user {facebook_id} (force_refresh={force_refresh})")
+        logger.info(f"Getting Canvas assignments for user {facebook_id} (force_refresh={force_refresh})")
         
-        # Check if cache is fresh and we don't need to refresh
-        if not force_refresh and is_canvas_cache_fresh(facebook_id):
-            logger.info(f"Using cached Canvas assignments for user {facebook_id}")
+        # ALWAYS use cached data unless force refresh or no cache exists
+        if not force_refresh:
+            # Check if we have ANY cached data (not checking freshness)
             cached_assignments = get_cached_canvas_assignments(facebook_id)
-            logger.info(f"Retrieved {len(cached_assignments)} cached assignments")
-            return cached_assignments
+            if cached_assignments:
+                logger.info(f"Using {len(cached_assignments)} cached assignments from DATABASE")
+                return cached_assignments
+            else:
+                logger.info(f"No cached assignments found, will do initial sync")
         
         # Fetch fresh data from Canvas API
         logger.info(f"Fetching fresh Canvas assignments for user {facebook_id}")
         from app.api.canvas_api import fetch_user_assignments
         
-        assignments = fetch_user_assignments(token, limit=200)
+        # Fetch ALL assignments from Canvas (up to 500)
+        assignments = fetch_user_assignments(token, limit=500)
         logger.info(f"Canvas API returned {len(assignments) if assignments else 0} assignments")
         
         if assignments:
