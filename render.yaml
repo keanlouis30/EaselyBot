@@ -1,0 +1,51 @@
+services:
+  # Main webhook service
+  - type: web
+    name: easely-webhook
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        fromService:
+          type: web
+          name: easely-webhook
+          property: port
+      # These need to be set in Render dashboard
+      - key: VERIFY_TOKEN
+        sync: false
+      - key: PAGE_ACCESS_TOKEN
+        sync: false
+      - key: APP_SECRET
+        sync: false
+      - key: CANVAS_API_URL
+        value: https://canvas.instructure.com
+      - key: CANVAS_API_VERSION
+        value: v1
+    autoDeploy: true
+    
+  # PostgreSQL database (for future use)
+  - type: pgsql
+    name: easely-db
+    plan: free
+    databaseName: easely_db
+    user: easely_user
+    
+  # Background job for reminders (future implementation)
+  # - type: cron
+  #   name: easely-reminders
+  #   env: node
+  #   schedule: "0 * * * *"  # Every hour
+  #   buildCommand: npm install
+  #   startCommand: node jobs/send-reminders.js
+  #   envVars:
+  #     - key: NODE_ENV
+  #       value: production
+  #     - key: DATABASE_URL
+  #       fromDatabase:
+  #         name: easely-db
+  #         property: connectionString
