@@ -42,20 +42,6 @@ function convertToManilaTime(utcDateTime) {
 }
 
 /**
- * Check if a string looks like a Canvas token
- * @param {string} text - Text to check
- * @returns {boolean} True if it looks like a Canvas token
- */
-function looksLikeCanvasToken(text) {
-    // Canvas tokens typically:
-    // - Start with numbers followed by ~
-    // - Are at least 40 characters long
-    // - Contain alphanumeric characters
-    const trimmed = text.trim();
-    return trimmed.length >= 40 && /^\d+~[A-Za-z0-9]+/.test(trimmed);
-}
-
-/**
  * Handle incoming text messages from users
  * @param {string} senderId - Facebook user ID
  * @param {string} text - Message text from user
@@ -75,13 +61,8 @@ async function handleMessage(senderId, text) {
             await updateUserLastSeen(senderId);
         }
         
-        // PRIORITY CHECK: If message looks like a Canvas token, handle it immediately
-        // This allows users to update their token at any time
-        if (looksLikeCanvasToken(text)) {
-            console.log(`Detected Canvas token from user ${senderId}`);
-            await handleTokenInput(senderId, text);
-            return; // Exit early after handling token
-        }
+        // Remove automatic token detection - only process tokens when user is in waiting_for_token state
+        // This is handled below in the isWaitingForToken check
         
         // Check for greetings and menu requests - but only if not in active flow
         let currentState = null;
@@ -620,45 +601,59 @@ async function handleTokenInput(senderId, token) {
             return;
         }
         
-        // Check if this is an update or new token
+        // Check if user exists in database and if they have an existing token
         const existingUser = await getUser(senderId);
-        const isUpdate = existingUser && existingUser.canvas_token;
         
+        if (!existingUser) {
+            console.error(`User ${senderId} not found in database - this shouldn't happen`);
+            await messengerApi.sendTextMessage(
+                senderId,
+                "⚠️ There was an issue with your account. Please type 'menu' to restart."
+            );
+            return;
+        }
+        
+        const hasExistingToken = existingUser.canvas_token ? true : false;
+        
+        // Show appropriate message
         await messengerApi.sendTextMessage(
             senderId,
-            `✅ Token verified! Welcome, ${validationResult.user.name || 'Student'}!\n\n${isUpdate ? 'Updating your Canvas connection...' : 'Setting up your Canvas connection...'}`
+            `✅ Token verified! Welcome, ${validationResult.user.name || 'Student'}!\n\n${hasExistingToken ? 'Updating your Canvas token...' : 'Saving your Canvas token...'}`
         );
         
-        // Store/update the token and Canvas user info in database (encrypt in production)
+        // Update the user's Canvas token and information
         try {
-            const { updateUser, createUser } = require('../database/supabaseClient');
+            const { updateUser } = require('../database/supabaseClient');
             
-            // Ensure user exists first
-            if (!existingUser) {
-                await createUser(senderId);
-                console.log(`Created user record for ${senderId}`);
-            }
-            
-            // Now update with Canvas information
-            await updateUser(senderId, {
-                canvas_token: token, // In production, encrypt this
-                canvas_url: CANVAS_BASE_URL || 'https://dlsu.instructure.com', // Store the Canvas URL
-                canvas_user_id: validationResult.user.id ? String(validationResult.user.id) : null, // Store Canvas user ID
+            // Update user with new Canvas information
+            const updateResult = await updateUser(senderId, {
+                canvas_token: token, // This will replace any existing token
+                canvas_url: CANVAS_BASE_URL || 'https://dlsu.instructure.com',
+                canvas_user_id: validationResult.user.id ? String(validationResult.user.id) : null,
                 last_canvas_sync: new Date().toISOString(),
                 canvas_sync_enabled: true,
-                onboarding_completed: true // Mark onboarding as complete
+                onboarding_completed: true
             });
             
-            console.log(`${isUpdate ? 'Updated' : 'Stored'} Canvas token and user ID ${validationResult.user.id} for Facebook user ${senderId}`);
-            
-            if (isUpdate) {
+            if (updateResult) {
+                console.log(`${hasExistingToken ? 'Updated existing' : 'Stored new'} Canvas token for user ${senderId}`);
+                
                 await messengerApi.sendTextMessage(
                     senderId,
-                    "✅ Your Canvas token has been updated successfully!"
+                    hasExistingToken 
+                        ? "✅ Your Canvas token has been updated successfully!" 
+                        : "✅ Your Canvas token has been saved successfully!"
                 );
+            } else {
+                throw new Error('Failed to update user record');
             }
         } catch (dbError) {
-            console.error(`Error storing Canvas token in database: ${dbError.message}`);
+            console.error(`Error updating Canvas token for user ${senderId}:`, dbError.message);
+            await messengerApi.sendTextMessage(
+                senderId,
+                "⚠️ Token validated but there was an issue saving it. Please try again."
+            );
+            return;
         }
         
         // Clear the waiting state and mark token as verified

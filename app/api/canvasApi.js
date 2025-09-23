@@ -35,20 +35,25 @@ function createCanvasClient(canvasToken, canvasUrl = null) {
  */
 async function getUserCanvasCredentials(facebookId) {
     try {
-        console.log(`Fetching Canvas credentials for user ${facebookId}`);
+        console.log(`\n🔑 Fetching Canvas credentials for user ${facebookId}`);
         const user = await getUser(facebookId);
         
         if (!user) {
-            console.log(`User ${facebookId} not found in database`);
+            console.log(`❌ User ${facebookId} not found in database`);
             return null;
         }
         
         if (!user.canvas_token) {
-            console.log(`No Canvas token found for user ${facebookId}`);
+            console.log(`❌ No Canvas token found for user ${facebookId}`);
             return null;
         }
         
-        console.log(`Found Canvas token for user ${facebookId}, URL: ${user.canvas_url || CANVAS_BASE_URL}`);
+        // Log token details (safely)
+        console.log(`✅ Found Canvas token for user ${facebookId}`);
+        console.log(`   Token length: ${user.canvas_token.length} characters`);
+        console.log(`   Token preview: ${user.canvas_token.substring(0, 10)}...`);
+        console.log(`   Canvas URL: ${user.canvas_url || CANVAS_BASE_URL}`);
+        console.log(`   Canvas User ID: ${user.canvas_user_id || 'Not stored'}`);
         
         return {
             token: user.canvas_token,
@@ -56,7 +61,7 @@ async function getUserCanvasCredentials(facebookId) {
             userId: user.canvas_user_id
         };
     } catch (error) {
-        console.error(`Error fetching Canvas credentials for user ${facebookId}:`, error.message);
+        console.error(`❌ Error fetching Canvas credentials for user ${facebookId}:`, error.message);
         return null;
     }
 }
@@ -97,18 +102,23 @@ async function fetchUserCourses(facebookId) {
  * @returns {Promise<Array>} Array of assignment objects
  */
 async function fetchUpcomingAssignments(facebookId, daysAhead = 7) {
+    console.log(`\n📚 Fetching upcoming assignments for user ${facebookId} (next ${daysAhead} days)`);
+    
     const credentials = await getUserCanvasCredentials(facebookId);
     
     if (!credentials) {
+        console.log(`❌ Cannot fetch assignments - no Canvas token found`);
         throw new Error('Canvas not connected. Please provide your Canvas API token first.');
     }
     
+    console.log(`🔗 Creating Canvas API client with user's token`);
     const client = createCanvasClient(credentials.token, credentials.url);
     const assignments = [];
     const endDate = moment().add(daysAhead, 'days').toISOString();
     
     try {
         // First, get all active courses
+        console.log(`📡 Calling Canvas API: GET /courses (using token: ${credentials.token.substring(0, 10)}...)`);
         const coursesResponse = await client.get('/courses', {
             params: {
                 enrollment_state: 'active',
@@ -117,10 +127,12 @@ async function fetchUpcomingAssignments(facebookId, daysAhead = 7) {
         });
         
         const courses = coursesResponse.data || [];
+        console.log(`📁 Found ${courses.length} active courses`);
         
         // For each course, fetch assignments
         for (const course of courses) {
             try {
+                console.log(`  📡 Fetching assignments for course: ${course.name}`);
                 const assignmentsResponse = await client.get(`/courses/${course.id}/assignments`, {
                     params: {
                         per_page: 100,
@@ -130,6 +142,7 @@ async function fetchUpcomingAssignments(facebookId, daysAhead = 7) {
                 });
                 
                 const courseAssignments = assignmentsResponse.data || [];
+                console.log(`    Found ${courseAssignments.length} assignments in ${course.name}`);
                 
                 // Filter assignments by due date and add course info
                 const upcomingAssignments = courseAssignments
@@ -155,9 +168,13 @@ async function fetchUpcomingAssignments(facebookId, daysAhead = 7) {
         // Sort by due date
         assignments.sort((a, b) => moment(a.due_at).diff(moment(b.due_at)));
         
+        console.log(`✅ Successfully fetched ${assignments.length} total assignments using user's token`);
         return assignments;
     } catch (error) {
-        console.error('Error fetching Canvas assignments:', error.response?.data || error.message);
+        console.error('❌ Error fetching Canvas assignments:', error.response?.data || error.message);
+        if (error.response?.status === 401) {
+            throw new Error('Canvas token is invalid or expired. Please update your Canvas token.');
+        }
         throw new Error('Failed to fetch assignments from Canvas. Please check your Canvas token.');
     }
 }
@@ -168,18 +185,23 @@ async function fetchUpcomingAssignments(facebookId, daysAhead = 7) {
  * @returns {Promise<Array>} Array of assignment objects
  */
 async function fetchThisWeekAssignments(facebookId) {
+    console.log(`\n📅 Fetching this week's assignments for user ${facebookId}`);
+    
     const credentials = await getUserCanvasCredentials(facebookId);
     
     if (!credentials) {
+        console.log(`❌ Cannot fetch assignments - no Canvas token found`);
         throw new Error('Canvas not connected. Please provide your Canvas API token first.');
     }
     
+    console.log(`🔗 Using Canvas token from database for user ${facebookId}`);
     const client = createCanvasClient(credentials.token, credentials.url);
     const assignments = [];
     
     // Calculate week boundaries
     const startOfWeek = moment().startOf('week');
     const endOfWeek = moment().endOf('week');
+    console.log(`📆 Week range: ${startOfWeek.format('MMM D')} - ${endOfWeek.format('MMM D')}`);
     
     try {
         // Get all active courses
