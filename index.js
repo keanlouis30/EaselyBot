@@ -143,8 +143,14 @@ async function handleMessage(senderId, message) {
     console.log(`New user created: ${senderId}`);
   }
   
-  if (message.text) {
-    const userMessage = message.text.toLowerCase().trim();
+  if (message.text || message.quick_reply) {
+    // Handle quick replies (Messenger sends them inside message.quick_reply)
+    if (message.quick_reply && message.quick_reply.payload) {
+      await handleQuickReply(senderId, message.quick_reply.payload);
+      return;
+    }
+
+    const userMessage = (message.text || '').toLowerCase().trim();
     const session = getUserSession(senderId);
     
     // Handle session-based flows first
@@ -159,7 +165,7 @@ async function handleMessage(senderId, message) {
       case 'hi':
       case 'hello':
         if (!user.isOnboarded) {
-          await sendOnboardingMessage(senderId);
+          await startOnboardingFlow(senderId);
         } else {
           await sendWelcomeMessage(senderId);
         }
@@ -168,7 +174,7 @@ async function handleMessage(senderId, message) {
         if (user.isOnboarded) {
           await sendWelcomeMessage(senderId);
         } else {
-          await sendOnboardingMessage(senderId);
+          await startOnboardingFlow(senderId);
         }
         break;
       case 'activate':
@@ -208,6 +214,34 @@ async function handleSessionFlow(senderId, messageText, session) {
   }
 }
 
+// Handle quick replies
+async function handleQuickReply(senderId, payload) {
+  switch (payload) {
+    case 'AGREE_TERMS': // legacy payload
+    case 'CONSENT_CONTINUE':
+      await sendPoliciesPrompt(senderId);
+      break;
+    case 'PRIVACY_POLICY': // legacy
+    case 'OPEN_PRIVACY_POLICY':
+      await sendPrivacyPolicyLink(senderId);
+      break;
+    case 'TERMS_OF_USE': // legacy
+    case 'OPEN_TERMS_OF_USE':
+      await sendTermsOfUseLink(senderId);
+      break;
+    case 'AGREE_PRIVACY':
+      updateUser(senderId, { agreedPrivacy: true });
+      await maybeFinishConsent(senderId);
+      break;
+    case 'AGREE_TERMS_OF_USE':
+      updateUser(senderId, { agreedTerms: true });
+      await maybeFinishConsent(senderId);
+      break;
+    default:
+      await sendGenericResponse(senderId);
+  }
+}
+
 // Handle postback events (button clicks)
 async function handlePostback(senderId, postback) {
   console.log(`Postback from ${senderId}:`, postback.payload);
@@ -220,9 +254,10 @@ async function handlePostback(senderId, postback) {
   
   switch (payload) {
     case 'GET_STARTED':
-      await sendOnboardingMessage(senderId);
+      await startOnboardingFlow(senderId);
       break;
     case 'AGREE_TERMS':
+      // Legacy handler - redirect to new flow
       await sendTokenRequestMessage(senderId);
       break;
     case 'SHOW_TUTORIAL':
@@ -294,7 +329,19 @@ async function sendWelcomeMessage(senderId) {
   await sendMessage(message);
 }
 
-// Onboarding message with consent
+// Start multi-step onboarding flow
+async function startOnboardingFlow(senderId) {
+  // Reset consent flags
+  updateUser(senderId, { agreedPrivacy: false, agreedTerms: false });
+
+  await sendIntroMessage(senderId);
+  await sendFreeFeaturesMessage(senderId);
+  await sendPremiumFeaturesMessage(senderId);
+  await sendConsentExplainer(senderId);
+  await sendPoliciesPrompt(senderId);
+}
+
+// Onboarding message with consent (legacy)
 async function sendOnboardingMessage(senderId) {
   const message = {
     recipient: { id: senderId },
@@ -321,6 +368,121 @@ async function sendOnboardingMessage(senderId) {
   };
   
   await sendMessage(message);
+}
+
+async function sendIntroMessage(senderId) {
+  const text = "Hi! I'm Easely, your personal Canvas assistant for Facebook Messenger. I turn your Canvas into a proactive, easy-to-manage experience so you never miss a deadline.";
+  await sendMessage({ recipient: { id: senderId }, message: { text } });
+}
+
+async function sendFreeFeaturesMessage(senderId) {
+  const text = "Easely (Free) includes:\n• Full Canvas sync (assignments and deadlines)\n• One reminder 24 hours before each due date\n• Add up to 5 manual tasks/month (synced to Canvas Calendar)\n• Quick filters: Due Today, This Week, Overdue, All Upcoming";
+  await sendMessage({ recipient: { id: senderId }, message: { text } });
+}
+
+async function sendPremiumFeaturesMessage(senderId) {
+  const text = "Easely Premium adds:\n• Proximity reminders: 1w, 3d, 1d, 8h, 2h, 1h\n• Unlimited manual tasks\n• AI-powered outline generation\n• Personalized weekly digest\n• Calendar export (Excel)";
+  await sendMessage({ recipient: { id: senderId }, message: { text } });
+}
+
+async function sendConsentExplainer(senderId) {
+  const text = "Before we continue, we need your consent to connect to your Canvas account and to send you reminders. Please review our Privacy Policy and Terms of Use.";
+  await sendMessage({ recipient: { id: senderId }, message: { text } });
+}
+
+async function sendPoliciesPrompt(senderId) {
+  const text = "Open and review:";
+  const quick_replies = [
+    { content_type: "text", title: "📜 Privacy Policy", payload: "OPEN_PRIVACY_POLICY" },
+    { content_type: "text", title: "⚖️ Terms of Use", payload: "OPEN_TERMS_OF_USE" }
+  ];
+  await sendMessage({ recipient: { id: senderId }, message: { text, quick_replies } });
+}
+
+async function sendPrivacyPolicyLink(senderId) {
+  const message = {
+    recipient: { id: senderId },
+    message: {
+      attachment: {
+        type: "template",
+        payload: {
+          template_type: "button",
+          text: "Tap to view our Privacy Policy:",
+          buttons: [
+            { type: "web_url", url: "https://easelyprivacypolicy.onrender.com", title: "Open Privacy Policy" }
+          ]
+        }
+      }
+    }
+  };
+  await sendMessage(message);
+
+  // After 5 seconds, ask for consent acknowledgement
+  setTimeout(async () => {
+    await sendMessage({
+      recipient: { id: senderId },
+      message: {
+        text: "Do you agree to the Privacy Policy?",
+        quick_replies: [
+          { content_type: "text", title: "✅ I Agree", payload: "AGREE_PRIVACY" }
+        ]
+      }
+    });
+  }, 5000);
+}
+
+async function sendTermsOfUseLink(senderId) {
+  const message = {
+    recipient: { id: senderId },
+    message: {
+      attachment: {
+        type: "template",
+        payload: {
+          template_type: "button",
+          text: "Tap to view our Terms of Use:",
+          buttons: [
+            { type: "web_url", url: "https://easelytermsofuse.onrender.com", title: "Open Terms of Use" }
+          ]
+        }
+      }
+    }
+  };
+  await sendMessage(message);
+
+  // After 5 seconds, ask for consent acknowledgement
+  setTimeout(async () => {
+    await sendMessage({
+      recipient: { id: senderId },
+      message: {
+        text: "Do you agree to the Terms of Use?",
+        quick_replies: [
+          { content_type: "text", title: "✅ I Agree", payload: "AGREE_TERMS_OF_USE" }
+        ]
+      }
+    });
+  }, 5000);
+}
+
+async function maybeFinishConsent(senderId) {
+  const user = getUser(senderId);
+  const agreedPrivacy = !!user?.agreedPrivacy;
+  const agreedTerms = !!user?.agreedTerms;
+
+  if (!agreedPrivacy && agreedTerms) {
+    // Prompt to open privacy policy if terms already agreed
+    await sendPoliciesPrompt(senderId);
+    return;
+  }
+  if (agreedPrivacy && !agreedTerms) {
+    // Prompt to open terms if privacy already agreed
+    await sendPoliciesPrompt(senderId);
+    return;
+  }
+  if (agreedPrivacy && agreedTerms) {
+    // Consent complete -> mark onboarded and show menu
+    updateUser(senderId, { isOnboarded: true });
+    await sendWelcomeMessage(senderId);
+  }
 }
 
 // Token request message
