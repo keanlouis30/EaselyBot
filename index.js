@@ -100,7 +100,8 @@ app.post('/webhook', async (req, res) => {
   const body = req.body;
 
   if (body.object === 'page') {
-    body.entry.forEach((entry) => {
+    // Process each entry asynchronously
+    for (const entry of body.entry) {
       const webhookEvent = entry.messaging[0];
       console.log('Received webhook event:', JSON.stringify(webhookEvent, null, 2));
       
@@ -111,7 +112,7 @@ app.post('/webhook', async (req, res) => {
       } else if (webhookEvent.postback) {
         await handlePostback(senderId, webhookEvent.postback);
       }
-    });
+    }
 
     res.status(200).send('EVENT_RECEIVED');
   } else {
