@@ -265,6 +265,34 @@ async function handleQuickReply(senderId, payload) {
       setUserSession(senderId, { flow: 'add_task', step: 'title' });
       await sendAddTaskFlow(senderId);
       break;
+    // New menu item handlers
+    case 'MY_TASKS':
+      await sendMyTasks(senderId);
+      break;
+    case 'CANVAS_SETUP':
+      await sendCanvasSetup(senderId);
+      break;
+    case 'HELP_AND_SUPPORT':
+      await sendHelpAndSupport(senderId);
+      break;
+    case 'UPGRADE_TO_PREMIUM':
+      await sendUpgradeToPremium(senderId);
+      break;
+    case 'TEST_CANVAS_CONNECTION':
+      await testCanvasConnection(senderId);
+      break;
+    case 'HOW_TO_USE':
+      await sendHowToUse(senderId);
+      break;
+    case 'REPORT_PROBLEM':
+      await sendReportProblem(senderId);
+      break;
+    case 'FEATURE_REQUEST':
+      await sendFeatureRequest(senderId);
+      break;
+    case 'CONTACT_SUPPORT':
+      await sendContactSupport(senderId);
+      break;
     default:
       await sendGenericResponse(senderId);
   }
@@ -316,48 +344,64 @@ async function handlePostback(senderId, postback) {
       setUserSession(senderId, { flow: 'add_task', step: 'title' });
       await sendAddTaskFlow(senderId);
       break;
+    // New menu item handlers for postbacks
+    case 'MY_TASKS':
+      await sendMyTasks(senderId);
+      break;
+    case 'CANVAS_SETUP':
+      await sendCanvasSetup(senderId);
+      break;
+    case 'HELP_AND_SUPPORT':
+      await sendHelpAndSupport(senderId);
+      break;
+    case 'UPGRADE_TO_PREMIUM':
+      await sendUpgradeToPremium(senderId);
+      break;
     default:
       await sendGenericResponse(senderId);
   }
 }
 
-// Welcome message with main menu
+// Welcome message (simplified now that we have persistent menu)
 async function sendWelcomeMessage(senderId) {
+  const user = getUser(senderId);
+  const userName = user?.canvasUser?.name ? `, ${user.canvasUser.name.split(' ')[0]}` : '';
+  
   const message = {
     recipient: { id: senderId },
     message: {
-      text: "Welcome back to Easely! What would you like to see?",
-      quick_replies: [
-        {
-          content_type: "text",
-          title: "🔥 Due Today",
-          payload: "GET_TASKS_TODAY"
-        },
-        {
-          content_type: "text",
-          title: "⏰ Due This Week",
-          payload: "GET_TASKS_WEEK"
-        },
-        {
-          content_type: "text",
-          title: "❗️ Show Overdue",
-          payload: "SHOW_OVERDUE"
-        },
-        {
-          content_type: "text",
-          title: "🗓 View All Upcoming",
-          payload: "VIEW_ALL_UPCOMING"
-        },
-        {
-          content_type: "text",
-          title: "➕ Add New Task",
-          payload: "ADD_NEW_TASK"
-        }
-      ]
+      text: `Welcome back${userName}! 🎉\n\nUse the menu button (☰) below to access:\n📋 My Tasks - View your assignments\n🔧 Canvas Setup - Configure your connection\n❓ Help & Support - Get assistance\n🌟 Upgrade to Premium - Unlock all features\n\nWhat would you like to do today?`
     }
   };
   
   await sendMessage(message);
+  
+  // Optionally show quick access to today's tasks
+  setTimeout(async () => {
+    await sendMessage({
+      recipient: { id: senderId },
+      message: {
+        text: "Quick access:",
+        quick_replies: [
+          {
+            content_type: "text",
+            title: "🔥 Due Today",
+            payload: "GET_TASKS_TODAY"
+          },
+          {
+            content_type: "text",
+            title: "⏰ Due This Week",
+            payload: "GET_TASKS_WEEK"
+          },
+          {
+            content_type: "text",
+            title: "📋 My Tasks",
+            payload: "MY_TASKS"
+          }
+        ]
+      }
+    });
+  }, 1000);
 }
 
 // Start multi-step onboarding flow
@@ -944,14 +988,21 @@ async function createTask(senderId, title, timeText) {
 
 // Helper function to get Manila timezone date
 function getManilaDate(date = new Date()) {
-  return new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Manila' }));
+  // Get the Manila time representation of the input date
+  const manilaDateString = date.toLocaleString('sv-SE', { timeZone: 'Asia/Manila' });
+  // Parse it back to a Date object - this gives us a Date that represents the Manila time
+  return new Date(manilaDateString);
 }
 
 // Helper function to check if two dates are the same day in Manila timezone
 function isSameDayManila(date1, date2) {
-  const d1 = getManilaDate(date1);
-  const d2 = getManilaDate(date2);
-  return d1.toDateString() === d2.toDateString();
+  // Convert both dates to Manila timezone for comparison
+  const manila1 = getManilaDate(date1);
+  const manila2 = getManilaDate(date2);
+  
+  return manila1.getFullYear() === manila2.getFullYear() &&
+         manila1.getMonth() === manila2.getMonth() &&
+         manila1.getDate() === manila2.getDate();
 }
 
 // Task display functions
@@ -1372,6 +1423,292 @@ async function sendActivationMessage(senderId) {
   await sendMessage(message);
 }
 
+// New handler functions for persistent menu items
+async function sendMyTasks(senderId) {
+  const message = {
+    recipient: { id: senderId },
+    message: {
+      text: "📋 My Tasks - What would you like to see?",
+      quick_replies: [
+        {
+          content_type: "text",
+          title: "🔥 Due Today",
+          payload: "GET_TASKS_TODAY"
+        },
+        {
+          content_type: "text",
+          title: "⏰ Due This Week",
+          payload: "GET_TASKS_WEEK"
+        },
+        {
+          content_type: "text",
+          title: "❗️ Show Overdue",
+          payload: "SHOW_OVERDUE"
+        },
+        {
+          content_type: "text",
+          title: "🗓 View All Upcoming",
+          payload: "VIEW_ALL_UPCOMING"
+        },
+        {
+          content_type: "text",
+          title: "➕ Add New Task",
+          payload: "ADD_NEW_TASK"
+        }
+      ]
+    }
+  };
+  
+  await sendMessage(message);
+}
+
+async function sendCanvasSetup(senderId) {
+  const user = getUser(senderId);
+  
+  if (!user || !user.canvasToken) {
+    const message = {
+      recipient: { id: senderId },
+      message: {
+        text: "🔧 Canvas Setup\n\nI don't see a Canvas token connected to your account. Let's set that up!\n\nDo you know how to get your Canvas Access Token?",
+        quick_replies: [
+          {
+            content_type: "text",
+            title: "✅ Yes, I have it",
+            payload: "HAVE_TOKEN"
+          },
+          {
+            content_type: "text",
+            title: "📖 Show Instructions",
+            payload: "SHOW_TUTORIAL"
+          },
+          {
+            content_type: "text",
+            title: "🎥 Watch Video Tutorial",
+            payload: "SHOW_VIDEO_TUTORIAL"
+          }
+        ]
+      }
+    };
+    
+    await sendMessage(message);
+  } else {
+    const message = {
+      recipient: { id: senderId },
+      message: {
+        text: `🔧 Canvas Setup\n\n✅ Connected as: ${user.canvasUser?.name || 'Canvas User'}\n\nYour Canvas account is already connected and working properly!\n\nWhat would you like to do?",
+        quick_replies: [
+          {
+            content_type: "text",
+            title: "🔄 Reconnect Canvas",
+            payload: "SHOW_TUTORIAL"
+          },
+          {
+            content_type: "text",
+            title: "🧪 Test Connection",
+            payload: "TEST_CANVAS_CONNECTION"
+          },
+          {
+            content_type: "text",
+            title: "📋 View My Tasks",
+            payload: "MY_TASKS"
+          }
+        ]
+      }
+    };
+    
+    await sendMessage(message);
+  }
+}
+
+async function sendHelpAndSupport(senderId) {
+  const message = {
+    recipient: { id: senderId },
+    message: {
+      text: "❓ Help & Support\n\nI'm here to help! What do you need assistance with?",
+      quick_replies: [
+        {
+          content_type: "text",
+          title: "🔧 Canvas Setup Help",
+          payload: "CANVAS_SETUP"
+        },
+        {
+          content_type: "text",
+          title: "📖 How to Use Easely",
+          payload: "HOW_TO_USE"
+        },
+        {
+          content_type: "text",
+          title: "🐛 Report a Problem",
+          payload: "REPORT_PROBLEM"
+        },
+        {
+          content_type: "text",
+          title: "💡 Feature Request",
+          payload: "FEATURE_REQUEST"
+        },
+        {
+          content_type: "text",
+          title: "📞 Contact Support",
+          payload: "CONTACT_SUPPORT"
+        }
+      ]
+    }
+  };
+  
+  await sendMessage(message);
+}
+
+async function sendUpgradeToPremium(senderId) {
+  const user = getUser(senderId);
+  
+  if (user?.subscriptionTier === 'premium') {
+    const message = {
+      recipient: { id: senderId },
+      message: {
+        text: "🌟 Premium Status\n\n✅ You're already a Premium subscriber!\n\nYou have access to:\n• Full proximity reminders (1w, 3d, 1d, 8h, 2h, 1h)\n• Unlimited manual tasks\n• AI-powered outline generation\n• Personalized weekly digest\n• Calendar export\n\nThank you for supporting Easely! 💙"
+      }
+    };
+    
+    await sendMessage(message);
+  } else {
+    const message = {
+      recipient: { id: senderId },
+      message: {
+        attachment: {
+          type: "template",
+          payload: {
+            template_type: "button",
+            text: "🌟 Upgrade to Premium\n\nUnlock powerful features:\n• Full proximity reminders (1w, 3d, 1d, 8h, 2h, 1h)\n• Unlimited manual tasks\n• AI-powered outline generation\n• Personalized weekly digest\n• Calendar export\n\nSupport Easely's development for just $3/month!",
+            buttons: [
+              {
+                type: "web_url",
+                url: "https://ko-fi.com/easely",
+                title: "☕ Support on Ko-fi"
+              }
+            ]
+          }
+        }
+      }
+    };
+    
+    await sendMessage(message);
+    
+    // Follow up with activation instructions
+    setTimeout(async () => {
+      await sendMessage({
+        recipient: { id: senderId },
+        message: {
+          text: "After supporting on Ko-fi, send me the word 'activate' to enable your Premium features! 🚀"
+        }
+      });
+    }, 3000);
+  }
+}
+
+// Additional helper functions for Help & Support menu
+async function testCanvasConnection(senderId) {
+  const user = getUser(senderId);
+  
+  if (!user || !user.canvasToken) {
+    await sendMessage({
+      recipient: { id: senderId },
+      message: { text: "No Canvas token found. Please set up Canvas first!\n\nUse 'Canvas Setup' from the menu to connect your account." }
+    });
+    return;
+  }
+  
+  await sendMessage({
+    recipient: { id: senderId },
+    message: { text: "Testing your Canvas connection..." }
+  });
+  
+  try {
+    const validation = await validateCanvasToken(user.canvasToken);
+    
+    if (validation.valid) {
+      const canvasUrl = process.env.CANVAS_BASE_URL || 'https://dlsu.instructure.com';
+      const successMessage = 'Connection successful!\n\nConnected as: ' + validation.user.name + '\nCanvas URL: ' + canvasUrl + '\n\nYour Canvas sync is working properly!';
+      await sendMessage({
+        recipient: { id: senderId },
+        message: { text: successMessage }
+      });
+    } else {
+      await sendMessage({
+        recipient: { id: senderId },
+        message: { text: 'Connection failed: ' + validation.error + '\n\nPlease try reconnecting your Canvas account.' }
+      });
+    }
+  } catch (error) {
+    await sendMessage({
+      recipient: { id: senderId },
+      message: { text: 'Connection test failed: ' + error.message + '\n\nPlease check your internet connection and try again.' }
+    });
+  }
+}
+
+async function sendHowToUse(senderId) {
+  const messages = [
+    "How to Use Easely\n\n1. **Connect Canvas**: First, connect your Canvas account using your Access Token\n\n2. **View Tasks**: Use 'My Tasks' to see assignments Due Today, This Week, Overdue, or All Upcoming\n\n3. **Add Custom Tasks**: Create manual tasks that sync with your Canvas Calendar",
+    "4. **Get Reminders**: Receive notifications before assignments are due (Premium: multiple reminders)\n\n5. **Stay Organized**: Check in daily to review your tasks and deadlines\n\n**Pro Tips**:\n• Say 'menu' anytime to see options\n• Say 'activate' after Ko-fi support to enable Premium\n• Check 'Due Today' each morning to plan your day"
+  ];
+  
+  for (const text of messages) {
+    await sendMessage({
+      recipient: { id: senderId },
+      message: { text }
+    });
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+}
+
+async function sendReportProblem(senderId) {
+  await sendMessage({
+    recipient: { id: senderId },
+    message: {
+      text: "Report a Problem\n\nI'm sorry you're experiencing issues! Please describe the problem you're facing, and I'll log it for our development team.\n\nCommon issues:\n• Canvas not syncing\n• Incorrect due dates\n• Missing assignments\n• Login problems\n\nPlease describe your issue:"
+    }
+  });
+  
+  // Could set a session to capture the problem description
+  setUserSession(senderId, { flow: 'report_problem', step: 'description' });
+}
+
+async function sendFeatureRequest(senderId) {
+  await sendMessage({
+    recipient: { id: senderId },
+    message: {
+      text: "Feature Request\n\nWe love hearing your ideas! What feature would you like to see in Easely?\n\nPopular requests:\n• Grade tracking\n• Assignment submission\n• Course schedule view\n• Study groups\n• Custom reminder times\n\nPlease share your idea:"
+    }
+  });
+  
+  // Could set a session to capture the feature request
+  setUserSession(senderId, { flow: 'feature_request', step: 'description' });
+}
+
+async function sendContactSupport(senderId) {
+  const message = {
+    recipient: { id: senderId },
+    message: {
+      attachment: {
+        type: "template",
+        payload: {
+          template_type: "button",
+          text: "Contact Support\n\nNeed direct assistance? Reach out through:\n\nEmail: support@easely.app\nFacebook: Message our page\nTwitter: @EaselyApp\n\nFor fastest response, include:\n• Your issue description\n• Canvas institution name\n• Screenshots if applicable",
+          buttons: [
+            {
+              type: "web_url",
+              url: "mailto:support@easely.app",
+              title: "Email Support"
+            }
+          ]
+        }
+      }
+    }
+  };
+  
+  await sendMessage(message);
+}
+
 // Generic response for unhandled messages
 async function sendGenericResponse(senderId) {
   const message = {
@@ -1415,8 +1752,81 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
+// Function to set up the persistent menu (hamburger menu)
+async function setupPersistentMenu() {
+  const menuData = {
+    persistent_menu: [
+      {
+        locale: "default",
+        composer_input_disabled: false,
+        call_to_actions: [
+          {
+            title: "📋 My Tasks",
+            type: "postback",
+            payload: "MY_TASKS"
+          },
+          {
+            title: "🔧 Canvas Setup",
+            type: "postback",
+            payload: "CANVAS_SETUP"
+          },
+          {
+            title: "❓ Help & Support",
+            type: "postback",
+            payload: "HELP_AND_SUPPORT"
+          },
+          {
+            title: "🌟 Upgrade to Premium",
+            type: "postback",
+            payload: "UPGRADE_TO_PREMIUM"
+          }
+        ]
+      }
+    ]
+  };
+
+  try {
+    const response = await axios.post(
+      `https://graph.facebook.com/v18.0/me/messenger_profile?access_token=${PAGE_ACCESS_TOKEN}`,
+      menuData,
+      {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    console.log('Persistent menu configured successfully');
+  } catch (error) {
+    console.error('Failed to set persistent menu:', error.response?.data || error.message);
+  }
+}
+
+// Function to set up the Get Started button
+async function setupGetStartedButton() {
+  const buttonData = {
+    get_started: {
+      payload: "GET_STARTED"
+    }
+  };
+
+  try {
+    const response = await axios.post(
+      `https://graph.facebook.com/v18.0/me/messenger_profile?access_token=${PAGE_ACCESS_TOKEN}`,
+      buttonData,
+      {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    console.log('Get Started button configured successfully');
+  } catch (error) {
+    console.error('Failed to set Get Started button:', error.response?.data || error.message);
+  }
+}
+
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Easely webhook server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
   
@@ -1425,8 +1835,13 @@ app.listen(PORT, () => {
   const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
   
   if (missingEnvVars.length > 0) {
-    console.warn('⚠️  Missing required environment variables:', missingEnvVars.join(', '));
+    console.warn('Missing required environment variables:', missingEnvVars.join(', '));
   } else {
-    console.log('✅ All required environment variables are set');
+    console.log('All required environment variables are set');
+    
+    // Setup Facebook Messenger persistent menu and Get Started button
+    console.log('Setting up Messenger profile...');
+    await setupGetStartedButton();
+    await setupPersistentMenu();
   }
 });
