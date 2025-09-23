@@ -237,6 +237,34 @@ async function handleQuickReply(senderId, payload) {
       updateUser(senderId, { agreedTerms: true });
       await maybeFinishConsent(senderId);
       break;
+    case 'SHOW_VIDEO_TUTORIAL':
+      await sendVideoTutorial(senderId);
+      break;
+    case 'HAVE_TOKEN':
+      await sendMessage({
+        recipient: { id: senderId },
+        message: { text: "Great! Please paste your Canvas Access Token here and I'll validate it." }
+      });
+      break;
+    case 'SHOW_TUTORIAL':
+      await sendTutorialMessage(senderId);
+      break;
+    case 'GET_TASKS_TODAY':
+      await sendTasksToday(senderId);
+      break;
+    case 'GET_TASKS_WEEK':
+      await sendTasksWeek(senderId);
+      break;
+    case 'SHOW_OVERDUE':
+      await sendOverdueTasks(senderId);
+      break;
+    case 'VIEW_ALL_UPCOMING':
+      await sendAllUpcoming(senderId);
+      break;
+    case 'ADD_NEW_TASK':
+      setUserSession(senderId, { flow: 'add_task', step: 'title' });
+      await sendAddTaskFlow(senderId);
+      break;
     default:
       await sendGenericResponse(senderId);
   }
@@ -262,6 +290,9 @@ async function handlePostback(senderId, postback) {
       break;
     case 'SHOW_TUTORIAL':
       await sendTutorialMessage(senderId);
+      break;
+    case 'SHOW_VIDEO_TUTORIAL':
+      await sendVideoTutorial(senderId);
       break;
     case 'HAVE_TOKEN':
       await sendMessage({
@@ -338,7 +369,7 @@ async function startOnboardingFlow(senderId) {
   await sendFreeFeaturesMessage(senderId);
   await sendPremiumFeaturesMessage(senderId);
   await sendConsentExplainer(senderId);
-  await sendPoliciesPrompt(senderId);
+  await sendPrivacyPolicyIntroduction(senderId);
 }
 
 // Onboarding message with consent (legacy)
@@ -388,6 +419,17 @@ async function sendPremiumFeaturesMessage(senderId) {
 async function sendConsentExplainer(senderId) {
   const text = "Before we continue, we need your consent to connect to your Canvas account and to send you reminders. Please review our Privacy Policy and Terms of Use.";
   await sendMessage({ recipient: { id: senderId }, message: { text } });
+}
+
+// New function to introduce privacy policy
+async function sendPrivacyPolicyIntroduction(senderId) {
+  const text = "🔒 To get started, please review our Privacy Policy to understand how we protect your data.";
+  await sendMessage({ recipient: { id: senderId }, message: { text } });
+  
+  // After a brief moment, show the privacy policy link
+  setTimeout(async () => {
+    await sendPrivacyPolicyLink(senderId);
+  }, 2000);
 }
 
 async function sendPoliciesPrompt(senderId) {
@@ -468,29 +510,38 @@ async function maybeFinishConsent(senderId) {
   const agreedPrivacy = !!user?.agreedPrivacy;
   const agreedTerms = !!user?.agreedTerms;
 
-  if (!agreedPrivacy && agreedTerms) {
-    // Prompt to open privacy policy if terms already agreed
-    await sendPoliciesPrompt(senderId);
-    return;
-  }
   if (agreedPrivacy && !agreedTerms) {
-    // Prompt to open terms if privacy already agreed
-    await sendPoliciesPrompt(senderId);
+    // Privacy agreed, now show Terms of Use introduction
+    await sendTermsOfUseIntroduction(senderId);
     return;
   }
   if (agreedPrivacy && agreedTerms) {
-    // Consent complete -> mark onboarded and show menu
-    updateUser(senderId, { isOnboarded: true });
-    await sendWelcomeMessage(senderId);
+    // Both consents complete -> ask for Canvas token
+    await sendCanvasTokenRequest(senderId);
+    return;
   }
+  // If neither agreed yet, wait for privacy agreement first
 }
 
-// Token request message
-async function sendTokenRequestMessage(senderId) {
+// New function to introduce terms of use
+async function sendTermsOfUseIntroduction(senderId) {
+  const text = "⚖️ Next, please review our Terms of Use to understand your rights and responsibilities.";
+  await sendMessage({ recipient: { id: senderId }, message: { text } });
+  
+  // After a brief moment, show the terms link
+  setTimeout(async () => {
+    await sendTermsOfUseLink(senderId);
+  }, 2000);
+}
+
+// New Canvas token request flow with better instructions
+async function sendCanvasTokenRequest(senderId) {
+  const text = "Perfect! Now I need to connect to your Canvas account to sync your assignments.\n\nI'll need your Canvas Access Token for this. Do you know how to get it?";
+  
   const message = {
     recipient: { id: senderId },
     message: {
-      text: "Great! Now I need your Canvas Access Token to connect to your account.\n\nDo you have your Canvas Access Token ready?",
+      text: text,
       quick_replies: [
         {
           content_type: "text",
@@ -499,8 +550,13 @@ async function sendTokenRequestMessage(senderId) {
         },
         {
           content_type: "text",
-          title: "❓ Show me how",
+          title: "📖 Show Instructions",
           payload: "SHOW_TUTORIAL"
+        },
+        {
+          content_type: "text",
+          title: "🎥 Watch Video Tutorial",
+          payload: "SHOW_VIDEO_TUTORIAL"
         }
       ]
     }
@@ -509,16 +565,79 @@ async function sendTokenRequestMessage(senderId) {
   await sendMessage(message);
 }
 
-// Tutorial message
+// Legacy token request message - kept for backward compatibility
+async function sendTokenRequestMessage(senderId) {
+  // Redirect to new flow
+  await sendCanvasTokenRequest(senderId);
+}
+
+// Tutorial message with video link option
 async function sendTutorialMessage(senderId) {
   const message = {
     recipient: { id: senderId },
     message: {
-      text: "Here's how to get your Canvas Access Token:\n\n1. Go to your Canvas account\n2. Click on 'Account' → 'Settings'\n3. Scroll to 'Approved Integrations'\n4. Click '+ New Access Token'\n5. Give it a purpose (like 'Easely Bot')\n6. IMPORTANT: Make sure to enable these permissions:\n   - Read assignments\n   - Write to calendar\n7. Copy the token and paste it here\n\n⚠️ Keep your token secure and don't share it with anyone else!\n\nOnce you have it, just paste the token in the chat."
+      text: "Here's how to get your Canvas Access Token:\n\n1. Log in to your Canvas account\n2. Click on 'Account' → 'Settings'\n3. Scroll to 'Approved Integrations'\n4. Click '+ New Access Token'\n5. Give it a purpose (like 'Easely Bot')\n6. Leave the expiration date empty (or set as desired)\n7. Click 'Generate Token'\n8. IMPORTANT: Copy the token immediately (you won't see it again!)\n\n⚠️ Keep your token secure and don't share it with anyone else!\n\nOnce you have it, paste the token here."
     }
   };
   
   await sendMessage(message);
+  
+  // After showing instructions, offer video help
+  setTimeout(async () => {
+    await sendMessage({
+      recipient: { id: senderId },
+      message: {
+        text: "Need visual help? Watch our video tutorial:",
+        quick_replies: [
+          {
+            content_type: "text",
+            title: "🎥 Watch Video",
+            payload: "SHOW_VIDEO_TUTORIAL"
+          },
+          {
+            content_type: "text",
+            title: "✅ I got it!",
+            payload: "HAVE_TOKEN"
+          }
+        ]
+      }
+    });
+  }, 3000);
+}
+
+// New function to send video tutorial link
+async function sendVideoTutorial(senderId) {
+  const message = {
+    recipient: { id: senderId },
+    message: {
+      attachment: {
+        type: "template",
+        payload: {
+          template_type: "button",
+          text: "🎥 Watch this quick video tutorial on how to get your Canvas Access Token:",
+          buttons: [
+            { 
+              type: "web_url", 
+              url: "https://github.com/keanlouis30/EaselyBot/releases/tag/v1.0.0-video", 
+              title: "Open Video Tutorial" 
+            }
+          ]
+        }
+      }
+    }
+  };
+  
+  await sendMessage(message);
+  
+  // After showing video link, prompt for token
+  setTimeout(async () => {
+    await sendMessage({
+      recipient: { id: senderId },
+      message: {
+        text: "After getting your token from Canvas, paste it here and I'll connect to your account!"
+      }
+    });
+  }, 3000);
 }
 
 // Canvas API integration functions
