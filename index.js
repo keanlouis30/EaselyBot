@@ -199,13 +199,33 @@ async function handleSessionFlow(senderId, messageText, session) {
   switch (session.flow) {
     case 'add_task':
       if (session.step === 'title') {
-        // User provided task title, now ask for time
-        setUserSession(senderId, { flow: 'add_task', step: 'time', taskTitle: messageText });
-        await sendTaskTimeRequest(senderId, messageText);
+        // Store task title, then ask for course
+        setUserSession(senderId, { flow: 'add_task', step: 'course', taskTitle: messageText });
+        await sendCourseSelection(senderId);
+      } else if (session.step === 'course_other') {
+        // User provided a custom course name
+        setUserSession(senderId, { ...session, step: 'description', courseName: messageText, courseId: null });
+        await sendDescriptionRequest(senderId);
+      } else if (session.step === 'description') {
+        // Store description then ask for due date
+        setUserSession(senderId, { ...session, step: 'date', description: messageText });
+        await sendTaskDateRequest(senderId);
+      } else if (session.step === 'date') {
+        // Only accept quick replies for date selection
+        await sendMessage({
+          recipient: { id: senderId },
+          message: { text: "Please use the date buttons below to choose a due date." }
+        });
+        await sendTaskDateRequest(senderId);
+        return;
       } else if (session.step === 'time') {
-        // User provided time, create the task
-        await createTask(senderId, session.taskTitle, messageText);
-        clearUserSession(senderId);
+        // Only accept quick replies for time selection
+        await sendMessage({
+          recipient: { id: senderId },
+          message: { text: "Please use the time buttons below to choose a due time." }
+        });
+        await sendTaskTimeRequest(senderId);
+        return;
       }
       break;
     default:
@@ -216,6 +236,29 @@ async function handleSessionFlow(senderId, messageText, session) {
 
 // Handle quick replies
 async function handleQuickReply(senderId, payload) {
+  // Dynamic payloads first
+  if (payload.startsWith('SELECT_COURSE_')) {
+    const courseToken = payload.replace('SELECT_COURSE_', '');
+    const session = getUserSession(senderId) || {};
+    if (session.flow === 'add_task' && session.step === 'course') {
+      if (courseToken === 'PERSONAL') {
+        setUserSession(senderId, { ...session, step: 'description', courseId: null, courseName: 'Personal' });
+        await sendDescriptionRequest(senderId);
+        return;
+      }
+      if (courseToken === 'OTHER') {
+        setUserSession(senderId, { ...session, step: 'course_other' });
+        await sendAskCustomCourseName(senderId);
+        return;
+      }
+      // courseToken is numeric id
+      const courseId = parseInt(courseToken, 10);
+      setUserSession(senderId, { ...session, step: 'description', courseId, courseName: 'Selected Course' });
+      await sendDescriptionRequest(senderId);
+      return;
+    }
+  }
+  
   switch (payload) {
     case 'AGREE_TERMS': // legacy payload
     case 'CONSENT_CONTINUE':
@@ -292,6 +335,35 @@ async function handleQuickReply(senderId, payload) {
       break;
     case 'CONTACT_SUPPORT':
       await sendContactSupport(senderId);
+      break;
+    // Task due date quick replies
+    case 'TASK_DATE_TODAY':
+      await handleTaskDateQuickReply(senderId, 'today');
+      break;
+    case 'TASK_DATE_TOMORROW':
+      await handleTaskDateQuickReply(senderId, 'tomorrow');
+      break;
+    case 'TASK_DATE_FRIDAY':
+      await handleTaskDateQuickReply(senderId, 'friday');
+      break;
+    case 'TASK_DATE_NEXT_MONDAY':
+      await handleTaskDateQuickReply(senderId, 'nextmonday');
+      break;
+    // Task due time quick replies
+    case 'TASK_TIME_8AM':
+      await handleTaskTimeQuickReply(senderId, 8, 0);
+      break;
+    case 'TASK_TIME_12PM':
+      await handleTaskTimeQuickReply(senderId, 12, 0);
+      break;
+    case 'TASK_TIME_5PM':
+      await handleTaskTimeQuickReply(senderId, 17, 0);
+      break;
+    case 'TASK_TIME_8PM':
+      await handleTaskTimeQuickReply(senderId, 20, 0);
+      break;
+    case 'TASK_TIME_11_59PM':
+      await handleTaskTimeQuickReply(senderId, 23, 59);
       break;
     default:
       await sendGenericResponse(senderId);
@@ -370,7 +442,7 @@ async function sendWelcomeMessage(senderId) {
   const message = {
     recipient: { id: senderId },
     message: {
-      text: `Welcome back${userName}! 🎉\n\nUse the menu button (☰) below to access:\n📋 My Tasks - View your assignments\n🔧 Canvas Setup - Configure your connection\n❓ Help & Support - Get assistance\n🌟 Upgrade to Premium - Unlock all features\n\nWhat would you like to do today?`
+      text: `Welcome back${userName}! 🎉\n\nUse the menu button below to access:\n📋 My Tasks - View your assignments\n🔧 Canvas Setup - Configure your connection\n❓ Help & Support - Get assistance\n🌟 Upgrade to Premium - Unlock all features\n\nWhat would you like to do today?`
     }
   };
   
@@ -945,26 +1017,65 @@ async function handleCanvasToken(senderId, token) {
   }
 }
 
-// Task management functions
-async function sendTaskTimeRequest(senderId, taskTitle) {
+// Task management functions - Date selection
+async function sendTaskDateRequest(senderId) {
   const message = {
     recipient: { id: senderId },
     message: {
-      text: `Perfect! I'll create "${taskTitle}" for you.\n\nWhen is this due? You can say things like:\n- "Tomorrow 5pm"\n- "Friday 11:59pm"\n- "Next Monday 9am"\n- "Dec 15 2pm"`
+      text: "When is this task due? First, choose the date using the buttons:",
+      quick_replies: [
+        { content_type: "text", title: "📅 Today", payload: "TASK_DATE_TODAY" },
+        { content_type: "text", title: "📅 Tomorrow", payload: "TASK_DATE_TOMORROW" },
+        { content_type: "text", title: "📅 Friday", payload: "TASK_DATE_FRIDAY" },
+        { content_type: "text", title: "📅 Next Monday", payload: "TASK_DATE_NEXT_MONDAY" }
+      ]
     }
   };
-  
   await sendMessage(message);
 }
 
-async function createTask(senderId, title, timeText) {
+// Task management functions - Time selection
+async function sendTaskTimeRequest(senderId) {
+  const message = {
+    recipient: { id: senderId },
+    message: {
+      text: "Great! Now choose the time using the buttons:",
+      quick_replies: [
+        { content_type: "text", title: "🌅 8:00 AM", payload: "TASK_TIME_8AM" },
+        { content_type: "text", title: "☀️ 12:00 PM", payload: "TASK_TIME_12PM" },
+        { content_type: "text", title: "🌆 5:00 PM", payload: "TASK_TIME_5PM" },
+        { content_type: "text", title: "🌙 8:00 PM", payload: "TASK_TIME_8PM" },
+        { content_type: "text", title: "⏰ 11:59 PM", payload: "TASK_TIME_11_59PM" }
+      ]
+    }
+  };
+  await sendMessage(message);
+}
+
+async function createTask(senderId, title, timeInput) {
   const user = getUser(senderId);
   if (user) {
+    // Handle both Date objects and strings
+    let dueDate, dueDateText;
+    
+    if (timeInput instanceof Date) {
+      dueDate = timeInput;
+      dueDateText = formatDueDate(dueDate);
+    } else {
+      // For text input, store as-is and try to create a Date for sorting
+      dueDateText = timeInput;
+      // Try to create a reasonable Date object for sorting purposes
+      const now = getManilaDate();
+      dueDate = new Date(now.getTime() + 24 * 60 * 60 * 1000); // Default to tomorrow
+    }
+    
     const newTask = {
       title: title,
-      dueDate: timeText,
+      dueDate: dueDate,
+      dueDateText: dueDateText, // Store the formatted text for display
       course: "Personal",
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      isManual: true // Flag to distinguish manual tasks
     };
     
     user.assignments.push(newTask);
@@ -973,36 +1084,134 @@ async function createTask(senderId, title, timeText) {
     const message = {
       recipient: { id: senderId },
       message: {
-        text: `✅ Task created successfully!\n\n📝 "${title}"\n⏰ Due: ${timeText}\n\nI've added this to your Canvas calendar and will remind you when it's due!`
+        text: `✅ Task created successfully!\n\n📝 "${title}"\n⏰ Due: ${dueDateText}\n\nI've added this to your task list and will include it in your reminders!`
       }
     };
     
     await sendMessage(message);
     
-    // Show updated task list
+    // Show updated task list after a moment
     setTimeout(async () => {
       await sendWelcomeMessage(senderId);
     }, 1000);
   }
 }
 
+// Create a Planner Note (To-Do) in Canvas
+async function createCanvasPlannerNote(senderId, { title, description, dueDate, courseId, courseName }) {
+  const user = getUser(senderId);
+  if (!user || !user.canvasToken) {
+    await sendMessage({ recipient: { id: senderId }, message: { text: '❌ No Canvas token found. Please set up Canvas first from the menu: Canvas Setup.' } });
+    return;
+  }
+  const canvasUrl = process.env.CANVAS_BASE_URL || 'https://dlsu.instructure.com';
+  const body = {
+    title: title,
+    details: description || '',
+    todo_date: dueDate.toISOString(),
+  };
+  if (courseId) body.course_id = courseId;
+
+  try {
+    await axios.post(`${canvasUrl}/api/v1/planner_notes`, body, {
+      headers: {
+        'Authorization': `Bearer ${user.canvasToken}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000
+    });
+
+    const whenText = formatDateTimeManila(dueDate);
+    const courseLabel = courseId ? (courseName || 'Selected Course') : 'Personal';
+
+    await sendMessage({
+      recipient: { id: senderId },
+      message: { text: `✅ Task created in Canvas!\n\n📝 "${title}"\n📚 ${courseLabel}\n⏰ Due: ${whenText}` }
+    });
+  } catch (error) {
+    console.error('Failed to create planner note:', error.response?.data || error.message);
+    await sendMessage({ recipient: { id: senderId }, message: { text: '❌ I could not create this task in Canvas. Please try again later.' } });
+  }
+}
+
+// List user's active courses (id, name)
+async function listUserCourses(token) {
+  const canvasUrl = process.env.CANVAS_BASE_URL || 'https://dlsu.instructure.com';
+  const res = await axios.get(`${canvasUrl}/api/v1/courses`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+    params: { enrollment_state: 'active', per_page: 50 },
+    timeout: 10000
+  });
+  return (res.data || []).map(c => ({ id: c.id, name: c.name }));
+}
+
+// Combine date and time into a single Date object
+function combineDateAndTime(dateObj, timeObj) {
+  return buildManilaDateFromParts({
+    year: dateObj.getFullYear(),
+    month: dateObj.getMonth() + 1,
+    day: dateObj.getDate(),
+    hour: timeObj.hour,
+    minute: timeObj.minute
+  });
+}
+
 // Helper function to get Manila timezone date
 function getManilaDate(date = new Date()) {
-  // Get the Manila time representation of the input date
-  const manilaDateString = date.toLocaleString('sv-SE', { timeZone: 'Asia/Manila' });
-  // Parse it back to a Date object - this gives us a Date that represents the Manila time
-  return new Date(manilaDateString);
+  // Create a new Date object that represents the current Manila time
+  const manilaTime = new Date(date.toLocaleString("en-US", {timeZone: "Asia/Manila"}));
+  return manilaTime;
 }
 
 // Helper function to check if two dates are the same day in Manila timezone
 function isSameDayManila(date1, date2) {
-  // Convert both dates to Manila timezone for comparison
-  const manila1 = getManilaDate(date1);
-  const manila2 = getManilaDate(date2);
+  // Get date parts directly in Manila timezone using Intl.DateTimeFormat
+  const getDateParts = (date) => {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Manila',
+      year: 'numeric',
+      month: '2-digit', 
+      day: '2-digit'
+    });
+    return formatter.format(date);
+  };
   
-  return manila1.getFullYear() === manila2.getFullYear() &&
-         manila1.getMonth() === manila2.getMonth() &&
-         manila1.getDate() === manila2.getDate();
+  return getDateParts(date1) === getDateParts(date2);
+}
+
+// Build a Date that represents a specific local time in Manila (UTC+08:00)
+function buildManilaDateFromParts({ year, month, day, hour = 17, minute = 0 }) {
+  const y = String(year).padStart(4, '0');
+  const m = String(month).padStart(2, '0');
+  const d = String(day).padStart(2, '0');
+  const hh = String(hour).padStart(2, '0');
+  const mm = String(minute).padStart(2, '0');
+  // Use explicit +08:00 offset to avoid relying on host timezone
+  return new Date(`${y}-${m}-${d}T${hh}:${mm}:00+08:00`);
+}
+
+// Get the next occurrence of a weekday in Manila timezone
+// targetDow: 0=Sun ... 6=Sat. If preferNext is true and today is the target, returns next week's target.
+function getTargetWeekdayManila(targetDow, preferNext = false) {
+  const now = getManilaDate();
+  const dow = now.getDay();
+  let delta = (targetDow - dow + 7) % 7;
+  if (delta === 0 && preferNext) delta = 7;
+  const target = new Date(now);
+  target.setDate(target.getDate() + delta);
+  return target;
+}
+
+function formatDateTimeManila(date) {
+  return date.toLocaleString('en-US', {
+    timeZone: 'Asia/Manila',
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
 }
 
 // Task display functions
@@ -1028,10 +1237,18 @@ async function sendTasksToday(senderId) {
     const canvasData = await fetchCanvasAssignments(user.canvasToken);
     const todayManila = getManilaDate();
     
-    const todayTasks = canvasData.assignments.filter(assignment => {
+    const todayCanvasTasks = canvasData.assignments.filter(assignment => {
       // Filter by today in Manila timezone
       return isSameDayManila(assignment.dueDate, todayManila);
     });
+    
+    // Also get manual tasks due today
+    const todayManualTasks = (user.assignments || []).filter(task => {
+      if (!task.isManual || !task.dueDate) return false;
+      return isSameDayManila(task.dueDate, todayManila);
+    });
+    
+    const totalTasks = todayCanvasTasks.length + todayManualTasks.length;
     
     // Send header message
     await sendMessage({
@@ -1039,9 +1256,9 @@ async function sendTasksToday(senderId) {
       message: { text: `🔥 Tasks due today (${todayManila.toLocaleDateString('en-US', { timeZone: 'Asia/Manila', weekday: 'long', month: 'short', day: 'numeric' })}):` }
     });
     
-    if (todayTasks.length > 0) {
-      // Send each assignment as a separate message
-      for (const assignment of todayTasks) {
+    if (totalTasks > 0) {
+      // Send Canvas assignments first
+      for (const assignment of todayCanvasTasks) {
         const dueTime = assignment.dueDate.toLocaleTimeString('en-US', {
           timeZone: 'Asia/Manila',
           hour: 'numeric',
@@ -1060,7 +1277,27 @@ async function sendTasksToday(senderId) {
           message: { text: assignmentText }
         });
         
-        // Small delay between messages to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      
+      // Send manual tasks
+      for (const task of todayManualTasks) {
+        const dueTime = task.dueDate.toLocaleTimeString('en-US', {
+          timeZone: 'Asia/Manila',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true
+        });
+        
+        const taskText = `📝 **${task.title}** (🔄 Manual)\n` +
+                        `📚 ${task.course}\n` +
+                        `⏰ Due: Today at ${dueTime}`;
+        
+        await sendMessage({
+          recipient: { id: senderId },
+          message: { text: taskText }
+        });
+        
         await new Promise(resolve => setTimeout(resolve, 500));
       }
     } else {
@@ -1233,7 +1470,7 @@ async function sendOverdueTasks(senderId) {
     // Send header message
     await sendMessage({
       recipient: { id: senderId },
-      message: { text: "❗️ Overdue tasks (excluding items older than 300 days):" }
+      message: { text: "⚠ Overdue tasks (excluding items older than 300 days):" }
     });
     
     if (overdueTasks.length > 0) {
@@ -1244,7 +1481,7 @@ async function sendOverdueTasks(senderId) {
         const daysOverdue = Math.floor((nowManila - assignment.dueDate) / (1000 * 60 * 60 * 24));
         const overdueText = daysOverdue === 1 ? '1 day' : `${daysOverdue} days`;
         
-        const assignmentText = `⚠️ **${assignment.title}**\n` +
+        const assignmentText = `⚠ **${assignment.title}**\n` +
                               `📚 ${assignment.course}\n` +
                               `⏰ Was due: ${formatDueDate(assignment.dueDate)}\n` +
                               `📅 Overdue by: ${overdueText}\n` +
@@ -1423,6 +1660,46 @@ async function sendActivationMessage(senderId) {
   await sendMessage(message);
 }
 
+// Prompt for course selection using user's Canvas courses
+async function sendCourseSelection(senderId) {
+  const user = getUser(senderId);
+  if (!user || !user.canvasToken) {
+    await sendMessage({ recipient: { id: senderId }, message: { text: "❌ No Canvas token found. Please set up Canvas first from the menu: Canvas Setup." } });
+    return;
+  }
+  try {
+    const courses = await listUserCourses(user.canvasToken);
+    const quickReplies = [];
+    // Add up to 10 courses as quick replies
+    courses.slice(0, 10).forEach(c => {
+      const title = c.name.length > 20 ? c.name.slice(0, 19) + '…' : c.name;
+      quickReplies.push({ content_type: 'text', title, payload: `SELECT_COURSE_${c.id}` });
+    });
+    // Add Personal and Other options
+    quickReplies.push({ content_type: 'text', title: '📁 Personal', payload: 'SELECT_COURSE_PERSONAL' });
+    quickReplies.push({ content_type: 'text', title: '✏️ Other Course', payload: 'SELECT_COURSE_OTHER' });
+
+    await sendMessage({
+      recipient: { id: senderId },
+      message: {
+        text: 'Which course is this task for?',
+        quick_replies: quickReplies
+      }
+    });
+  } catch (e) {
+    console.error('Failed to fetch courses for selection:', e.message);
+    await sendMessage({ recipient: { id: senderId }, message: { text: 'I could not load your courses. Please try again later.' } });
+  }
+}
+
+async function sendAskCustomCourseName(senderId) {
+  await sendMessage({ recipient: { id: senderId }, message: { text: 'Please type the course name:' } });
+}
+
+async function sendDescriptionRequest(senderId) {
+  await sendMessage({ recipient: { id: senderId }, message: { text: 'Add a short description for this task (optional). You can also skip by sending a dash (-).' } });
+}
+
 // New handler functions for persistent menu items
 async function sendMyTasks(senderId) {
   const message = {
@@ -1495,7 +1772,7 @@ async function sendCanvasSetup(senderId) {
     const message = {
       recipient: { id: senderId },
       message: {
-        text: `🔧 Canvas Setup\n\n✅ Connected as: ${user.canvasUser?.name || 'Canvas User'}\n\nYour Canvas account is already connected and working properly!\n\nWhat would you like to do?",
+        text: `🔧 Canvas Setup\n\n✅ Connected as: ${user.canvasUser?.name || 'Canvas User'}\n\nYour Canvas account is already connected and working properly!\n\nWhat would you like to do?`,
         quick_replies: [
           {
             content_type: "text",
@@ -1721,7 +1998,92 @@ async function sendGenericResponse(senderId) {
   await sendMessage(message);
 }
 
-// Helper function to check if text looks like a Canvas token
+// Handle task date quick replies
+async function handleTaskDateQuickReply(senderId, dateType) {
+  const session = getUserSession(senderId);
+  if (!session || session.flow !== 'add_task' || session.step !== 'date') {
+    await sendGenericResponse(senderId);
+    return;
+  }
+  
+  const now = getManilaDate();
+  let taskDate;
+  
+  switch (dateType) {
+    case 'today':
+      taskDate = buildManilaDateFromParts({
+        year: now.getFullYear(),
+        month: now.getMonth() + 1,
+        day: now.getDate(),
+        hour: 0,
+        minute: 0
+      });
+      break;
+    case 'tomorrow':
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      taskDate = buildManilaDateFromParts({
+        year: tomorrow.getFullYear(),
+        month: tomorrow.getMonth() + 1,
+        day: tomorrow.getDate(),
+        hour: 0,
+        minute: 0
+      });
+      break;
+    case 'friday':
+      const targetFriday = getTargetWeekdayManila(5, true); // 5 = Friday, preferNext = true
+      taskDate = buildManilaDateFromParts({
+        year: targetFriday.getFullYear(),
+        month: targetFriday.getMonth() + 1,
+        day: targetFriday.getDate(),
+        hour: 0,
+        minute: 0
+      });
+      break;
+    case 'nextmonday':
+      const targetMonday = getTargetWeekdayManila(1, true); // 1 = Monday, preferNext = true
+      taskDate = buildManilaDateFromParts({
+        year: targetMonday.getFullYear(),
+        month: targetMonday.getMonth() + 1,
+        day: targetMonday.getDate(),
+        hour: 0,
+        minute: 0
+      });
+      break;
+    default:
+      await sendGenericResponse(senderId);
+      return;
+  }
+  
+  // Store date and ask for time
+  setUserSession(senderId, { ...session, step: 'time', taskDate });
+  await sendTaskTimeRequest(senderId);
+}
+
+// Handle task time quick replies
+async function handleTaskTimeQuickReply(senderId, hour, minute) {
+  const session = getUserSession(senderId);
+  if (!session || session.flow !== 'add_task' || session.step !== 'time' || !session.taskDate) {
+    await sendGenericResponse(senderId);
+    return;
+  }
+  
+  // Combine stored date with selected time
+  const finalDateTime = combineDateAndTime(session.taskDate, { hour, minute });
+  
+  // Create the task in Canvas using Planner Notes
+  await createCanvasPlannerNote(senderId, {
+    title: session.taskTitle,
+    description: session.description || '',
+    dueDate: finalDateTime,
+    courseId: session.courseId || null,
+    courseName: session.courseName || 'Personal'
+  });
+  clearUserSession(senderId);
+}
+
+
+// Helper function to get Manila timezone date
 function isCanvasToken(text) {
   // Canvas tokens are typically long alphanumeric strings
   return text.length > 20 && /^[a-zA-Z0-9~]+$/.test(text);
