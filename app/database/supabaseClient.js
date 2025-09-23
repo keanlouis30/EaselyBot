@@ -283,14 +283,16 @@ async function logWebhookEvent(eventType, facebookId, eventData, processingStatu
     
     try {
         const { error } = await supabase
-            .from('webhook_events')
+            .from('webhook_logs')  // Fixed table name
             .insert([{
                 event_type: eventType,
-                facebook_id: facebookId,
+                sender_id: facebookId,  // Changed to match schema
                 event_data: eventData,
                 processing_status: processingStatus,
                 error_message: errorMessage,
-                created_at: new Date().toISOString()
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+                retry_count: 0
             }]);
         
         if (error) {
@@ -319,14 +321,15 @@ async function logUserMessage(facebookId, messageType, messageContent, eventData
     
     try {
         const { error } = await supabase
-            .from('user_messages')
+            .from('message_logs')  // Fixed table name
             .insert([{
                 facebook_id: facebookId,
                 message_type: messageType,
                 message_content: messageContent,
                 event_data: eventData,
                 response_action: responseAction,
-                created_at: new Date().toISOString()
+                created_at: new Date().toISOString(),
+                timestamp: new Date().toISOString()
             }]);
         
         if (error) {

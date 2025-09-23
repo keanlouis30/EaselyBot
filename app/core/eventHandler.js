@@ -13,6 +13,12 @@ const {
     setUserSession, 
     clearUserSession 
 } = require('../database/supabaseClient');
+const {
+    fetchUpcomingAssignments,
+    fetchThisWeekAssignments,
+    testCanvasConnection,
+    formatAssignmentsList
+} = require('../api/canvasApi');
 
 // Store user session data (in production, use proper database)
 const userSessions = {};
@@ -549,15 +555,23 @@ async function handleTokenInput(senderId, token) {
         "Token received. Validating with Canvas..."
     );
     
-    // For now, simulate successful validation (Canvas API integration can be added later)
+    // Validate the token with Canvas API
     try {
-        // TODO: Add Canvas API validation here
-        // const validationResult = await validateCanvasToken(token);
+        // Test the Canvas connection with the provided token
+        const validationResult = await testCanvasConnection(token);
         
-        // Simulate success for now
+        if (!validationResult.success) {
+            await messengerApi.sendTextMessage(
+                senderId,
+                "❌ Invalid Canvas token. Please make sure you copied the entire token correctly.\n\n" +
+                "Try again or type 'cancel' to go back."
+            );
+            return;
+        }
+        
         await messengerApi.sendTextMessage(
             senderId,
-            "✅ Token verified! Syncing your Canvas data..."
+            `✅ Token verified! Welcome, ${validationResult.user.name || 'Student'}!\n\nSyncing your Canvas data...`
         );
         
         // Store the token in database (encrypt in production)
@@ -607,29 +621,159 @@ async function handleTokenInput(senderId, token) {
     }
 }
 
-// Task management handlers (stubs for now)
+// Task management handlers with Canvas API integration
 async function handleGetTasksToday(senderId) {
-    await messengerApi.sendTextMessage(senderId, "🔄 Fetching today's assignments from Canvas...");
-    // TODO: Implement Canvas API integration
-    await messengerApi.sendTextMessage(senderId, "✨ No assignments due today! You're all caught up!");
+    try {
+        await messengerApi.sendTextMessage(senderId, "🔄 Fetching today's assignments from Canvas...");
+        
+        // Fetch assignments due in the next 24 hours
+        const assignments = await fetchUpcomingAssignments(senderId, 1);
+        
+        if (assignments && assignments.length > 0) {
+            // Filter for assignments due today
+            const todayAssignments = assignments.filter(assignment => {
+                const dueDate = moment(assignment.due_at);
+                return dueDate.isSame(moment(), 'day');
+            });
+            
+            if (todayAssignments.length > 0) {
+                const formattedList = formatAssignmentsList(todayAssignments);
+                await messengerApi.sendTextMessage(senderId, formattedList);
+            } else {
+                await messengerApi.sendTextMessage(senderId, "✨ No assignments due today! You're all caught up!");
+            }
+        } else {
+            await messengerApi.sendTextMessage(senderId, "✨ No assignments due today! You're all caught up!");
+        }
+    } catch (error) {
+        console.error(`Error fetching today's tasks for ${senderId}:`, error.message);
+        
+        if (error.message.includes('Canvas not connected')) {
+            await messengerApi.sendTextMessage(
+                senderId,
+                "❌ Canvas is not connected. Please set up your Canvas token first.\n\n" +
+                "Use the 'Canvas Setup' option from the menu to connect your account."
+            );
+        } else {
+            await messengerApi.sendTextMessage(
+                senderId,
+                "❌ Unable to fetch assignments. Please check your Canvas connection or try again later."
+            );
+        }
+    }
 }
 
 async function handleGetTasksWeek(senderId) {
-    await messengerApi.sendTextMessage(senderId, "🔄 Fetching this week's assignments from Canvas...");
-    // TODO: Implement Canvas API integration
-    await messengerApi.sendTextMessage(senderId, "✨ No assignments due this week! You're ahead of schedule!");
+    try {
+        await messengerApi.sendTextMessage(senderId, "🔄 Fetching this week's assignments from Canvas...");
+        
+        // Fetch assignments for this week
+        const assignments = await fetchThisWeekAssignments(senderId);
+        
+        if (assignments && assignments.length > 0) {
+            const formattedList = formatAssignmentsList(assignments);
+            await messengerApi.sendTextMessage(senderId, formattedList);
+        } else {
+            await messengerApi.sendTextMessage(senderId, "✨ No assignments due this week! You're ahead of schedule!");
+        }
+    } catch (error) {
+        console.error(`Error fetching week's tasks for ${senderId}:`, error.message);
+        
+        if (error.message.includes('Canvas not connected')) {
+            await messengerApi.sendTextMessage(
+                senderId,
+                "❌ Canvas is not connected. Please set up your Canvas token first.\n\n" +
+                "Use the 'Canvas Setup' option from the menu to connect your account."
+            );
+        } else {
+            await messengerApi.sendTextMessage(
+                senderId,
+                "❌ Unable to fetch assignments. Please check your Canvas connection or try again later."
+            );
+        }
+    }
 }
 
 async function handleGetTasksOverdue(senderId) {
-    await messengerApi.sendTextMessage(senderId, "🔄 Checking for overdue assignments...");
-    // TODO: Implement Canvas API integration
-    await messengerApi.sendTextMessage(senderId, "✅ No overdue assignments! Great job staying on top of things!");
+    try {
+        await messengerApi.sendTextMessage(senderId, "🔄 Checking for overdue assignments...");
+        
+        // Fetch all assignments and filter for overdue
+        const assignments = await fetchUpcomingAssignments(senderId, 30); // Get last 30 days worth
+        
+        if (assignments && assignments.length > 0) {
+            const now = moment();
+            const overdueAssignments = assignments.filter(assignment => {
+                const dueDate = moment(assignment.due_at);
+                return dueDate.isBefore(now);
+            });
+            
+            if (overdueAssignments.length > 0) {
+                const formattedList = formatAssignmentsList(overdueAssignments);
+                await messengerApi.sendTextMessage(
+                    senderId,
+                    "⚠️ **Overdue Assignments:**\n\n" + formattedList
+                );
+            } else {
+                await messengerApi.sendTextMessage(senderId, "✅ No overdue assignments! Great job staying on top of things!");
+            }
+        } else {
+            await messengerApi.sendTextMessage(senderId, "✅ No overdue assignments! Great job staying on top of things!");
+        }
+    } catch (error) {
+        console.error(`Error fetching overdue tasks for ${senderId}:`, error.message);
+        
+        if (error.message.includes('Canvas not connected')) {
+            await messengerApi.sendTextMessage(
+                senderId,
+                "❌ Canvas is not connected. Please set up your Canvas token first.\n\n" +
+                "Use the 'Canvas Setup' option from the menu to connect your account."
+            );
+        } else {
+            await messengerApi.sendTextMessage(
+                senderId,
+                "❌ Unable to fetch assignments. Please check your Canvas connection or try again later."
+            );
+        }
+    }
 }
 
 async function handleGetTasksAll(senderId) {
-    await messengerApi.sendTextMessage(senderId, "🔄 Fetching all upcoming assignments...");
-    // TODO: Implement Canvas API integration
-    await messengerApi.sendTextMessage(senderId, "📚 All your assignments are up to date!");
+    try {
+        await messengerApi.sendTextMessage(senderId, "🔄 Fetching all upcoming assignments...");
+        
+        // Fetch assignments for the next 30 days
+        const assignments = await fetchUpcomingAssignments(senderId, 30);
+        
+        if (assignments && assignments.length > 0) {
+            const formattedList = formatAssignmentsList(assignments);
+            await messengerApi.sendTextMessage(senderId, formattedList);
+            
+            if (assignments.length > 10) {
+                await messengerApi.sendTextMessage(
+                    senderId,
+                    `📊 Showing first 10 of ${assignments.length} assignments. Check Canvas for complete list.`
+                );
+            }
+        } else {
+            await messengerApi.sendTextMessage(senderId, "📚 No upcoming assignments found!");
+        }
+    } catch (error) {
+        console.error(`Error fetching all tasks for ${senderId}:`, error.message);
+        
+        if (error.message.includes('Canvas not connected')) {
+            await messengerApi.sendTextMessage(
+                senderId,
+                "❌ Canvas is not connected. Please set up your Canvas token first.\n\n" +
+                "Use the 'Canvas Setup' option from the menu to connect your account."
+            );
+        } else {
+            await messengerApi.sendTextMessage(
+                senderId,
+                "❌ Unable to fetch assignments. Please check your Canvas connection or try again later."
+            );
+        }
+    }
 }
 
 async function handleAddNewTask(senderId) {
