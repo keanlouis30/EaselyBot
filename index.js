@@ -91,7 +91,7 @@ app.post('/webhook', (req, res) => {
   } else {
     res.sendStatus(404);
   }
-}
+});
 
 // User management functions
 function getUser(senderId) {
