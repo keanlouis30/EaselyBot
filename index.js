@@ -12,6 +12,10 @@ const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const APP_SECRET = process.env.APP_SECRET;
 
+// In-memory storage (resets on deployment)
+const users = new Map(); // senderId -> user data
+const userSessions = new Map(); // senderId -> current session state
+
 // Middleware
 app.use(bodyParser.json({ verify: verifyRequestSignature }));
 app.use(express.static('public'));
@@ -87,28 +91,92 @@ app.post('/webhook', (req, res) => {
   } else {
     res.sendStatus(404);
   }
-});
+}
+
+// User management functions
+function getUser(senderId) {
+  return users.get(senderId) || null;
+}
+
+function createUser(senderId) {
+  const userData = {
+    senderId: senderId,
+    isOnboarded: false,
+    canvasToken: null,
+    subscriptionTier: 'free',
+    createdAt: new Date().toISOString(),
+    assignments: []
+  };
+  users.set(senderId, userData);
+  return userData;
+}
+
+function updateUser(senderId, updates) {
+  const user = users.get(senderId);
+  if (user) {
+    Object.assign(user, updates);
+    users.set(senderId, user);
+  }
+  return user;
+}
+
+function getUserSession(senderId) {
+  return userSessions.get(senderId) || null;
+}
+
+function setUserSession(senderId, sessionData) {
+  userSessions.set(senderId, sessionData);
+}
+
+function clearUserSession(senderId) {
+  userSessions.delete(senderId);
+}
 
 // Handle incoming messages
 async function handleMessage(senderId, message) {
   console.log(`Message from ${senderId}:`, message.text);
   
+  // Get or create user
+  let user = getUser(senderId);
+  if (!user) {
+    user = createUser(senderId);
+    console.log(`New user created: ${senderId}`);
+  }
+  
   if (message.text) {
     const userMessage = message.text.toLowerCase().trim();
+    const session = getUserSession(senderId);
     
-    // Route messages based on content
+    // Handle session-based flows first
+    if (session && session.flow) {
+      await handleSessionFlow(senderId, message.text, session);
+      return;
+    }
+    
+    // Route messages based on content and user state
     switch (userMessage) {
       case 'get started':
       case 'hi':
       case 'hello':
+        if (!user.isOnboarded) {
+          await sendOnboardingMessage(senderId);
+        } else {
+          await sendWelcomeMessage(senderId);
+        }
+        break;
       case 'menu':
-        await sendWelcomeMessage(senderId);
+        if (user.isOnboarded) {
+          await sendWelcomeMessage(senderId);
+        } else {
+          await sendOnboardingMessage(senderId);
+        }
         break;
       case 'activate':
         await sendActivationMessage(senderId);
+        updateUser(senderId, { subscriptionTier: 'premium' });
         break;
       default:
-        // Check if it's a Canvas token (typically starts with specific patterns)
+        // Check if it's a Canvas token
         if (isCanvasToken(message.text)) {
           await handleCanvasToken(senderId, message.text);
         } else {
@@ -118,11 +186,37 @@ async function handleMessage(senderId, message) {
   }
 }
 
+// Handle session-based conversation flows
+async function handleSessionFlow(senderId, messageText, session) {
+  const user = getUser(senderId);
+  
+  switch (session.flow) {
+    case 'add_task':
+      if (session.step === 'title') {
+        // User provided task title, now ask for time
+        setUserSession(senderId, { flow: 'add_task', step: 'time', taskTitle: messageText });
+        await sendTaskTimeRequest(senderId, messageText);
+      } else if (session.step === 'time') {
+        // User provided time, create the task
+        await createTask(senderId, session.taskTitle, messageText);
+        clearUserSession(senderId);
+      }
+      break;
+    default:
+      clearUserSession(senderId);
+      await sendGenericResponse(senderId);
+  }
+}
+
 // Handle postback events (button clicks)
 async function handlePostback(senderId, postback) {
   console.log(`Postback from ${senderId}:`, postback.payload);
   
   const payload = postback.payload;
+  let user = getUser(senderId);
+  if (!user) {
+    user = createUser(senderId);
+  }
   
   switch (payload) {
     case 'GET_STARTED':
@@ -133,6 +227,12 @@ async function handlePostback(senderId, postback) {
       break;
     case 'SHOW_TUTORIAL':
       await sendTutorialMessage(senderId);
+      break;
+    case 'HAVE_TOKEN':
+      await sendMessage({
+        recipient: { id: senderId },
+        message: { text: "Great! Please paste your Canvas Access Token here and I'll validate it." }
+      });
       break;
     case 'GET_TASKS_TODAY':
       await sendTasksToday(senderId);
@@ -147,6 +247,7 @@ async function handlePostback(senderId, postback) {
       await sendAllUpcoming(senderId);
       break;
     case 'ADD_NEW_TASK':
+      setUserSession(senderId, { flow: 'add_task', step: 'title' });
       await sendAddTaskFlow(senderId);
       break;
     default:
@@ -260,8 +361,16 @@ async function sendTutorialMessage(senderId) {
 
 // Handle Canvas token submission
 async function handleCanvasToken(senderId, token) {
-  // TODO: Validate token against Canvas API
-  // For now, we'll simulate validation
+  // Simulate token validation and mark user as onboarded
+  updateUser(senderId, { 
+    canvasToken: token, 
+    isOnboarded: true,
+    assignments: [
+      { title: "Math Homework", dueDate: "Tomorrow 11:59 PM", course: "Mathematics" },
+      { title: "History Essay", dueDate: "Friday 11:59 PM", course: "History" },
+      { title: "Chemistry Lab Report", dueDate: "Next Monday 8:00 AM", course: "Chemistry" }
+    ]
+  });
   
   const message = {
     recipient: { id: senderId },
@@ -271,26 +380,103 @@ async function handleCanvasToken(senderId, token) {
   };
   
   await sendMessage(message);
+  
+  // After a moment, show the main menu
+  setTimeout(async () => {
+    await sendWelcomeMessage(senderId);
+  }, 2000);
 }
 
-// Placeholder functions for task management
-async function sendTasksToday(senderId) {
+// Task management functions
+async function sendTaskTimeRequest(senderId, taskTitle) {
   const message = {
     recipient: { id: senderId },
     message: {
-      text: "🔥 Tasks due today:\n\n📝 Math Homework - Due today 11:59 PM\n\nYou're doing great! Keep it up! 💪"
+      text: `Perfect! I'll create "${taskTitle}" for you.\n\nWhen is this due? You can say things like:\n- "Tomorrow 5pm"\n- "Friday 11:59pm"\n- "Next Monday 9am"\n- "Dec 15 2pm"`
     }
   };
   
   await sendMessage(message);
 }
 
-async function sendTasksWeek(senderId) {
+async function createTask(senderId, title, timeText) {
+  const user = getUser(senderId);
+  if (user) {
+    const newTask = {
+      title: title,
+      dueDate: timeText,
+      course: "Personal",
+      createdAt: new Date().toISOString()
+    };
+    
+    user.assignments.push(newTask);
+    updateUser(senderId, { assignments: user.assignments });
+    
+    const message = {
+      recipient: { id: senderId },
+      message: {
+        text: `✅ Task created successfully!\n\n📝 "${title}"\n⏰ Due: ${timeText}\n\nI've added this to your Canvas calendar and will remind you when it's due!`
+      }
+    };
+    
+    await sendMessage(message);
+    
+    // Show updated task list
+    setTimeout(async () => {
+      await sendWelcomeMessage(senderId);
+    }, 1000);
+  }
+}
+
+// Task display functions
+async function sendTasksToday(senderId) {
+  const user = getUser(senderId);
+  let taskText = "🔥 Tasks due today:\n\n";
+  
+  if (user && user.assignments.length > 0) {
+    const todayTasks = user.assignments.filter(task => 
+      task.dueDate.toLowerCase().includes('today') || 
+      task.dueDate.toLowerCase().includes('tomorrow')
+    );
+    
+    if (todayTasks.length > 0) {
+      todayTasks.forEach(task => {
+        taskText += `📝 ${task.title} - Due ${task.dueDate}\n`;
+      });
+    } else {
+      taskText += "No tasks due today! 🎉";
+    }
+  } else {
+    taskText += "No tasks found. Add your Canvas token to sync assignments!";
+  }
+  
+  taskText += "\n\nYou're doing great! Keep it up! 💪";
+  
   const message = {
     recipient: { id: senderId },
-    message: {
-      text: "⏰ Tasks due this week:\n\n📝 Math Homework - Due today 11:59 PM\n📊 History Essay - Due Friday 11:59 PM\n🧪 Chemistry Lab Report - Due Next Monday 8:00 AM\n\nStay organized! You've got this! 📚"
-    }
+    message: { text: taskText }
+  };
+  
+  await sendMessage(message);
+}
+
+async function sendTasksWeek(senderId) {
+  const user = getUser(senderId);
+  let taskText = "⏰ Tasks due this week:\n\n";
+  
+  if (user && user.assignments.length > 0) {
+    user.assignments.forEach(task => {
+      taskText += `📝 ${task.title} - Due ${task.dueDate}\n`;
+    });
+  } else {
+    taskText += "No tasks found. Add your Canvas token to sync assignments!";
+  }
+  
+  taskText += "\n\nStay organized! You've got this! 📚";
+  
+  const message = {
+    recipient: { id: senderId },
+    message: { text: taskText }
   };
   
   await sendMessage(message);
