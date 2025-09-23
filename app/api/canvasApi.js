@@ -35,12 +35,20 @@ function createCanvasClient(canvasToken, canvasUrl = null) {
  */
 async function getUserCanvasCredentials(facebookId) {
     try {
+        console.log(`Fetching Canvas credentials for user ${facebookId}`);
         const user = await getUser(facebookId);
         
-        if (!user || !user.canvas_token) {
+        if (!user) {
+            console.log(`User ${facebookId} not found in database`);
+            return null;
+        }
+        
+        if (!user.canvas_token) {
             console.log(`No Canvas token found for user ${facebookId}`);
             return null;
         }
+        
+        console.log(`Found Canvas token for user ${facebookId}, URL: ${user.canvas_url || CANVAS_BASE_URL}`);
         
         return {
             token: user.canvas_token,

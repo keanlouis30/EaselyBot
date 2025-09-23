@@ -19,6 +19,7 @@ const {
     testCanvasConnection,
     formatAssignmentsList
 } = require('../api/canvasApi');
+const { CANVAS_BASE_URL } = require('../config/settings');
 
 // Store user session data (in production, use proper database)
 const userSessions = {};
@@ -41,6 +42,20 @@ function convertToManilaTime(utcDateTime) {
 }
 
 /**
+ * Check if a string looks like a Canvas token
+ * @param {string} text - Text to check
+ * @returns {boolean} True if it looks like a Canvas token
+ */
+function looksLikeCanvasToken(text) {
+    // Canvas tokens typically:
+    // - Start with numbers followed by ~
+    // - Are at least 40 characters long
+    // - Contain alphanumeric characters
+    const trimmed = text.trim();
+    return trimmed.length >= 40 && /^\d+~[A-Za-z0-9]+/.test(trimmed);
+}
+
+/**
  * Handle incoming text messages from users
  * @param {string} senderId - Facebook user ID
  * @param {string} text - Message text from user
@@ -58,6 +73,14 @@ async function handleMessage(senderId, text) {
         if (user) {
             // Update last seen for existing users
             await updateUserLastSeen(senderId);
+        }
+        
+        // PRIORITY CHECK: If message looks like a Canvas token, handle it immediately
+        // This allows users to update their token at any time
+        if (looksLikeCanvasToken(text)) {
+            console.log(`Detected Canvas token from user ${senderId}`);
+            await handleTokenInput(senderId, text);
+            return; // Exit early after handling token
         }
         
         // Check for greetings and menu requests - but only if not in active flow
@@ -112,6 +135,19 @@ async function handleMessage(senderId, text) {
             // Check for special commands
             if (text.toUpperCase() === 'ACTIVATE') {
                 await handlePremiumActivation(senderId);
+            }
+            // Check for assignment-related commands
+            else if (textLower.includes('today') || textLower === 'today\'s tasks' || textLower === 'tasks today') {
+                await handleGetTasksToday(senderId);
+            }
+            else if (textLower.includes('this week') || textLower.includes('week') || textLower === 'weekly') {
+                await handleGetTasksWeek(senderId);
+            }
+            else if (textLower.includes('overdue') || textLower.includes('late') || textLower.includes('missed')) {
+                await handleGetTasksOverdue(senderId);
+            }
+            else if (textLower.includes('all') || textLower.includes('upcoming') || textLower.includes('assignments')) {
+                await handleGetTasksAll(senderId);
             }
             // Check if they're asking for menu/help
             else if (textLower.includes('menu') || textLower.includes('help') || textLower.includes('start') || textLower.includes('hi') || textLower.includes('hello') || textLower.includes('hey')) {
@@ -466,20 +502,35 @@ async function handleTokenKnowHow(senderId) {
 }
 
 async function handleTokenNeedHelp(senderId) {
-    const instructions = (
-        "Here's how to get your Canvas Access Token:\\n\\n" +
-        "1. Log into your Canvas account\\n" +
-        "2. Click on Account → Settings\\n" +
-        "3. Scroll down to 'Approved Integrations'\\n" +
-        "4. Click '+ New Access Token'\\n" +
-        "5. Enter 'Easely Bot' as the purpose\\n" +
-        "6. Leave expiry date blank (never expires)\\n" +
-        "7. Click 'Generate Token'\\n" +
-        "8. Copy the token immediately\\n\\n" +
-        "IMPORTANT: Save the token before closing the dialog - you won't see it again!"
-    );
+    // Send instructions as individual messages for better readability
+    await messengerApi.sendTextMessage(senderId, "Here's how to get your Canvas Access Token:");
     
-    await messengerApi.sendTextMessage(senderId, instructions);
+    // Send each step as a separate message with slight delays
+    const steps = [
+        "1️⃣ Log into your Canvas account",
+        "2️⃣ Click on Account → Settings",
+        "3️⃣ Scroll down to 'Approved Integrations'",
+        "4️⃣ Click '+ New Access Token'",
+        "5️⃣ Enter 'Easely Bot' as the purpose",
+        "6️⃣ Leave expiry date blank (never expires)",
+        "7️⃣ Click 'Generate Token'",
+        "8️⃣ Copy the token immediately"
+    ];
+    
+    // Send each step with typing indicator
+    for (const step of steps) {
+        await messengerApi.sendTypingIndicator(senderId, "typing_on");
+        await new Promise(resolve => setTimeout(resolve, 500)); // Small delay for readability
+        await messengerApi.sendTextMessage(senderId, step);
+    }
+    
+    // Send important warning
+    await messengerApi.sendTypingIndicator(senderId, "typing_on");
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await messengerApi.sendTextMessage(
+        senderId, 
+        "⚠️ IMPORTANT: Save the token before closing the dialog - you won't see it again!"
+    );
     
     // Ask if they want video or are ready
     const quickReplies = [
@@ -569,21 +620,43 @@ async function handleTokenInput(senderId, token) {
             return;
         }
         
+        // Check if this is an update or new token
+        const existingUser = await getUser(senderId);
+        const isUpdate = existingUser && existingUser.canvas_token;
+        
         await messengerApi.sendTextMessage(
             senderId,
-            `✅ Token verified! Welcome, ${validationResult.user.name || 'Student'}!\n\nSyncing your Canvas data...`
+            `✅ Token verified! Welcome, ${validationResult.user.name || 'Student'}!\n\n${isUpdate ? 'Updating your Canvas connection...' : 'Setting up your Canvas connection...'}`
         );
         
-        // Store the token in database (encrypt in production)
+        // Store/update the token and Canvas user info in database (encrypt in production)
         try {
-            const { updateUser } = require('../database/supabaseClient');
+            const { updateUser, createUser } = require('../database/supabaseClient');
+            
+            // Ensure user exists first
+            if (!existingUser) {
+                await createUser(senderId);
+                console.log(`Created user record for ${senderId}`);
+            }
+            
+            // Now update with Canvas information
             await updateUser(senderId, {
                 canvas_token: token, // In production, encrypt this
+                canvas_url: CANVAS_BASE_URL || 'https://dlsu.instructure.com', // Store the Canvas URL
+                canvas_user_id: validationResult.user.id ? String(validationResult.user.id) : null, // Store Canvas user ID
                 last_canvas_sync: new Date().toISOString(),
                 canvas_sync_enabled: true,
                 onboarding_completed: true // Mark onboarding as complete
             });
-            console.log(`Successfully stored Canvas token for user ${senderId}`);
+            
+            console.log(`${isUpdate ? 'Updated' : 'Stored'} Canvas token and user ID ${validationResult.user.id} for Facebook user ${senderId}`);
+            
+            if (isUpdate) {
+                await messengerApi.sendTextMessage(
+                    senderId,
+                    "✅ Your Canvas token has been updated successfully!"
+                );
+            }
         } catch (dbError) {
             console.error(`Error storing Canvas token in database: ${dbError.message}`);
         }
@@ -592,25 +665,15 @@ async function handleTokenInput(senderId, token) {
         await clearUserState(senderId);
         await setUserState(senderId, "token_verified", "token_validation_success");
         
-        // Show success message and offer premium upgrade
+        // Show success message
         await messengerApi.sendTextMessage(
             senderId,
-            "Great! Your Canvas integration is complete.\\n\\n" +
-            "I can now help you stay on top of your assignments and deadlines. " +
-            "Would you like to see what Easely Premium offers?"
+            "Great! Your Canvas integration is complete!\n\n" +
+            "I can now help you stay on top of your assignments and deadlines."
         );
         
-        // Offer premium upgrade
-        const quickReplies = [
-            messengerApi.createQuickReply("💎 Learn More", "SHOW_PREMIUM"),
-            messengerApi.createQuickReply("📚 Start Using Free", "SKIP_PREMIUM")
-        ];
-        
-        await messengerApi.sendQuickReplies(
-            senderId,
-            "Choose your next step:",
-            quickReplies
-        );
+        // Show main menu for immediate use
+        await messengerApi.sendMainMenu(senderId);
         
     } catch (error) {
         console.error(`Token validation error: ${error.message}`);
