@@ -11,6 +11,7 @@ const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const APP_SECRET = process.env.APP_SECRET;
+const ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN; // For admin dashboard authentication
 
 // In-memory storage (resets on deployment)
 const users = new Map(); // senderId -> user data
@@ -38,6 +39,27 @@ function verifyRequestSignature(req, res, buf) {
     console.error('Invalid signature');
     throw new Error('Invalid signature');
   }
+}
+
+// Admin authentication middleware
+function requireAdminAuth(req, res, next) {
+  const adminToken = req.get('X-Admin-Token');
+  
+  if (!ADMIN_API_TOKEN) {
+    console.error('ADMIN_API_TOKEN not configured');
+    return res.status(500).json({ error: 'Admin API not configured' });
+  }
+  
+  if (!adminToken) {
+    return res.status(401).json({ error: 'Missing X-Admin-Token header' });
+  }
+  
+  if (adminToken !== ADMIN_API_TOKEN) {
+    console.warn('Invalid admin token attempt');
+    return res.status(403).json({ error: 'Invalid admin token' });
+  }
+  
+  next();
 }
 
 // Health check endpoint
@@ -91,6 +113,46 @@ app.post('/webhook', (req, res) => {
   } else {
     res.sendStatus(404);
   }
+});
+
+// Admin endpoint for broadcasting announcements
+app.post('/admin/broadcast', express.json(), requireAdminAuth, async (req, res) => {
+  const { message, targetUsers = 'all', testMode = false } = req.body;
+  
+  if (!message || !message.text) {
+    return res.status(400).json({ error: 'Message with text property is required' });
+  }
+  
+  console.log(`Admin broadcast initiated: ${message.text.substring(0, 50)}...`);
+  
+  // Start broadcast in background to avoid timeout
+  broadcastMessage(message, targetUsers, testMode)
+    .then(result => {
+      console.log('Broadcast completed:', result);
+    })
+    .catch(error => {
+      console.error('Broadcast failed:', error);
+    });
+  
+  res.json({ 
+    success: true, 
+    message: 'Broadcast initiated',
+    totalUsers: users.size,
+    testMode 
+  });
+});
+
+// Admin endpoint to get user statistics
+app.get('/admin/stats', requireAdminAuth, (req, res) => {
+  const stats = {
+    totalUsers: users.size,
+    onboardedUsers: Array.from(users.values()).filter(u => u.isOnboarded).length,
+    premiumUsers: Array.from(users.values()).filter(u => u.subscriptionTier === 'premium').length,
+    usersWithCanvas: Array.from(users.values()).filter(u => u.canvasToken).length,
+    timestamp: new Date().toISOString()
+  };
+  
+  res.json(stats);
 });
 
 // User management functions
@@ -1146,7 +1208,7 @@ async function createCanvasPlannerNote(senderId, { title, description, dueDate, 
   const user = getUser(senderId);
   if (!user || !user.canvasToken) {
     await sendMessage({ recipient: { id: senderId }, message: { text: '❌ No Canvas token found. Please set up Canvas first from the menu: Canvas Setup.' } });
-    return;
+    return null;
   }
   
   const canvasUrl = process.env.CANVAS_BASE_URL || 'https://dlsu.instructure.com';
@@ -1187,6 +1249,19 @@ async function createCanvasPlannerNote(senderId, { title, description, dueDate, 
       }
     });
     
+    // Return task data for local storage
+    return {
+      title: title,
+      dueDate: dueDate,
+      course: courseLabel,
+      courseId: courseId,
+      description: description || '',
+      createdAt: new Date().toISOString(),
+      isManual: true,
+      canvasId: plannerResponse.data.id,
+      canvasType: 'planner_note'
+    };
+    
   } catch (plannerError) {
     console.error('Planner Note creation failed:', plannerError.response?.data || plannerError.message);
     
@@ -1225,6 +1300,19 @@ async function createCanvasPlannerNote(senderId, { title, description, dueDate, 
         }
       });
       
+      // Return task data for local storage
+      return {
+        title: title,
+        dueDate: dueDate,
+        course: courseLabel,
+        courseId: courseId,
+        description: description || '',
+        createdAt: new Date().toISOString(),
+        isManual: true,
+        canvasId: eventResponse.data.id,
+        canvasType: 'calendar_event'
+      };
+      
     } catch (eventError) {
       console.error('Calendar Event creation also failed:', eventError.response?.data || eventError.message);
       
@@ -1261,6 +1349,19 @@ async function createCanvasPlannerNote(senderId, { title, description, dueDate, 
             }
           });
           
+          // Return task data for local storage
+          return {
+            title: title,
+            dueDate: dueDate,
+            course: courseLabel,
+            courseId: courseId,
+            description: description || '',
+            createdAt: new Date().toISOString(),
+            isManual: true,
+            canvasId: assignmentResponse.data.id,
+            canvasType: 'assignment'
+          };
+          
         } catch (assignmentError) {
           console.error('Assignment creation also failed:', assignmentError.response?.data || assignmentError.message);
           await sendCanvasCreationFailure(senderId, title, courseLabel, whenText, assignmentError);
@@ -1270,6 +1371,9 @@ async function createCanvasPlannerNote(senderId, { title, description, dueDate, 
       }
     }
   }
+  
+  // Return null if all methods failed
+  return null;
 }
 
 // Handle Canvas creation failure with detailed error message
@@ -1500,10 +1604,19 @@ async function sendTasksWeek(senderId) {
     const nextWeekManila = getManilaDate();
     nextWeekManila.setDate(nextWeekManila.getDate() + 7);
     
-    const weekTasks = canvasData.assignments.filter(assignment => {
+    const weekCanvasTasks = canvasData.assignments.filter(assignment => {
       const dueDateManila = getManilaDate(assignment.dueDate);
       return dueDateManila >= todayManila && dueDateManila <= nextWeekManila;
     });
+    
+    // Also get manual tasks due this week
+    const weekManualTasks = (user.assignments || []).filter(task => {
+      if (!task.isManual || !task.dueDate) return false;
+      const dueDateManila = getManilaDate(task.dueDate);
+      return dueDateManila >= todayManila && dueDateManila <= nextWeekManila;
+    });
+    
+    const weekTasks = [...weekCanvasTasks, ...weekManualTasks];
     
     // Send header message
     const weekEndDate = nextWeekManila.toLocaleDateString('en-US', {
@@ -1547,7 +1660,9 @@ async function sendTasksWeek(senderId) {
             hour12: true
           });
           
-          const assignmentText = `📝 ${assignment.title}\n` +
+          // Check if this is a manual task
+          const isManual = assignment.isManual;
+          const assignmentText = `📝 ${assignment.title}${isManual ? ' (🔄 Manual)' : ''}\n` +
                                 `📚 ${assignment.course}\n` +
                                 `⏰ Due: ${dueTime}\n` +
                                 (assignment.pointsPossible ? `💯 Points: ${assignment.pointsPossible}` : '');
@@ -1612,11 +1727,20 @@ async function sendOverdueTasks(senderId) {
     const cutoffDate = getManilaDate();
     cutoffDate.setDate(cutoffDate.getDate() - 300); // 300 days ago
     
-    const overdueTasks = canvasData.assignments.filter(assignment => {
+    const overdueCanvasTasks = canvasData.assignments.filter(assignment => {
       const dueDateManila = getManilaDate(assignment.dueDate);
       // Only show tasks that are overdue but not more than 300 days old
       return dueDateManila < nowManila && dueDateManila > cutoffDate;
     });
+    
+    // Also get manual tasks that are overdue
+    const overdueManualTasks = (user.assignments || []).filter(task => {
+      if (!task.isManual || !task.dueDate) return false;
+      const dueDateManila = getManilaDate(task.dueDate);
+      return dueDateManila < nowManila && dueDateManila > cutoffDate;
+    });
+    
+    const overdueTasks = [...overdueCanvasTasks, ...overdueManualTasks];
     
     // Sort by how recently they were due (most recent first)
     overdueTasks.sort((a, b) => b.dueDate - a.dueDate);
@@ -1635,7 +1759,8 @@ async function sendOverdueTasks(senderId) {
         const daysOverdue = Math.floor((nowManila - assignment.dueDate) / (1000 * 60 * 60 * 24));
         const overdueText = daysOverdue === 1 ? '1 day' : `${daysOverdue} days`;
         
-        const assignmentText = `⚠ **${assignment.title}**\n` +
+        const isManual = assignment.isManual;
+        const assignmentText = `⚠ **${assignment.title}${isManual ? ' (🔄 Manual)' : ''}**\n` +
                               `📚 ${assignment.course}\n` +
                               `⏰ Was due: ${formatDueDate(assignment.dueDate)}\n` +
                               `📅 Overdue by: ${overdueText}\n` +
@@ -2229,14 +2354,37 @@ async function handleTaskTimeQuickReply(senderId, hour, minute) {
   const finalDateTime = combineDateAndTime(session.taskDate, { hour, minute });
   
   // Create the task in Canvas using Planner Notes
-  await createCanvasPlannerNote(senderId, {
+  const createdTask = await createCanvasPlannerNote(senderId, {
     title: session.taskTitle,
     description: session.description || '',
     dueDate: finalDateTime,
     courseId: session.courseId || null,
     courseName: session.courseName || 'Personal'
   });
+  
+  // If task was successfully created in Canvas, also store it locally
+  if (createdTask) {
+    const user = getUser(senderId);
+    if (user) {
+      // Initialize assignments array if it doesn't exist
+      if (!user.assignments) {
+        user.assignments = [];
+      }
+      
+      // Add the created task to user's assignments
+      user.assignments.push(createdTask);
+      updateUser(senderId, { assignments: user.assignments });
+      
+      console.log(`Task '${createdTask.title}' stored locally for user ${senderId}`);
+    }
+  }
+  
   clearUserSession(senderId);
+  
+  // Show updated task list after a moment
+  setTimeout(async () => {
+    await sendWelcomeMessage(senderId);
+  }, 2000);
 }
 
 
@@ -2263,6 +2411,97 @@ async function sendMessage(messageData) {
   } catch (error) {
     console.error('Error sending message:', error.response?.data || error.message);
   }
+}
+
+// Broadcast message to multiple users
+async function broadcastMessage(message, targetUsers = 'all', testMode = false) {
+  const results = {
+    total: 0,
+    successful: 0,
+    failed: 0,
+    errors: []
+  };
+  
+  // Get target user list
+  let targetUserIds = [];
+  
+  if (targetUsers === 'all') {
+    // Send to all onboarded users
+    targetUserIds = Array.from(users.entries())
+      .filter(([id, user]) => user.isOnboarded)
+      .map(([id, user]) => id);
+  } else if (targetUsers === 'premium') {
+    // Send to premium users only
+    targetUserIds = Array.from(users.entries())
+      .filter(([id, user]) => user.subscriptionTier === 'premium')
+      .map(([id, user]) => id);
+  } else if (Array.isArray(targetUsers)) {
+    // Send to specific user IDs
+    targetUserIds = targetUsers;
+  }
+  
+  // In test mode, only send to first 3 users
+  if (testMode) {
+    targetUserIds = targetUserIds.slice(0, 3);
+    console.log('Test mode: Broadcasting to first 3 users only');
+  }
+  
+  results.total = targetUserIds.length;
+  console.log(`Starting broadcast to ${results.total} users`);
+  
+  // Process in batches to respect rate limits
+  const batchSize = 20; // Facebook allows up to 100 requests per second
+  const delayBetweenBatches = 2000; // 2 seconds between batches
+  
+  for (let i = 0; i < targetUserIds.length; i += batchSize) {
+    const batch = targetUserIds.slice(i, i + batchSize);
+    
+    // Send messages in parallel within batch
+    const batchPromises = batch.map(async (userId) => {
+      try {
+        // Prepare the broadcast message with recipient
+        const broadcastData = {
+          recipient: { id: userId },
+          message: {
+            ...message,
+            // Add broadcast indicator if not present
+            text: message.text || '📢 Announcement from Easely'
+          }
+        };
+        
+        // Add metadata tag to identify as broadcast
+        if (broadcastData.message) {
+          broadcastData.message.metadata = JSON.stringify({ 
+            type: 'broadcast',
+            timestamp: new Date().toISOString() 
+          });
+        }
+        
+        await sendMessage(broadcastData);
+        results.successful++;
+        console.log(`✅ Broadcast sent to user ${userId}`);
+      } catch (error) {
+        results.failed++;
+        results.errors.push({
+          userId,
+          error: error.response?.data?.error?.message || error.message
+        });
+        console.error(`❌ Failed to send to user ${userId}:`, error.message);
+      }
+    });
+    
+    // Wait for batch to complete
+    await Promise.allSettled(batchPromises);
+    
+    // Add delay between batches if not last batch
+    if (i + batchSize < targetUserIds.length) {
+      console.log(`Batch ${Math.floor(i / batchSize) + 1} complete. Waiting before next batch...`);
+      await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
+    }
+  }
+  
+  console.log(`Broadcast complete: ${results.successful}/${results.total} successful`);
+  return results;
 }
 
 // Error handling middleware
@@ -2351,7 +2590,9 @@ app.listen(PORT, async () => {
   
   // Check required environment variables
   const requiredEnvVars = ['VERIFY_TOKEN', 'PAGE_ACCESS_TOKEN', 'APP_SECRET'];
+  const optionalEnvVars = ['ADMIN_API_TOKEN'];
   const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
+  const missingOptional = optionalEnvVars.filter(envVar => !process.env[envVar]);
   
   if (missingEnvVars.length > 0) {
     console.warn('Missing required environment variables:', missingEnvVars.join(', '));
@@ -2362,5 +2603,12 @@ app.listen(PORT, async () => {
     console.log('Setting up Messenger profile...');
     await setupGetStartedButton();
     await setupPersistentMenu();
+  }
+  
+  if (missingOptional.length > 0) {
+    console.warn('Missing optional environment variables:', missingOptional.join(', '));
+    console.warn('Admin API endpoints will not be available without ADMIN_API_TOKEN');
+  } else {
+    console.log('Admin API enabled at /admin/broadcast and /admin/stats');
   }
 });
