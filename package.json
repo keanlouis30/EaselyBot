@@ -5,10 +5,13 @@
   "main": "main.js",
   "scripts": {
     "start": "node main.js",
+    "start:prod": "NODE_ENV=production node main.js",
     "dev": "nodemon main.js",
     "test": "jest",
     "setup": "node setupBot.js",
-    "setup:clear": "node setupBot.js --clear"
+    "setup:clear": "node setupBot.js --clear",
+    "build": "npm ci --production",
+    "postinstall": "echo 'Dependencies installed successfully'"
   },
   "keywords": ["facebook", "messenger", "bot", "canvas", "lms", "education"],
   "author": "Kean Louis",

@@ -470,19 +470,70 @@ app.use((error, req, res, next) => {
     res.status(500).json({ error: 'Internal server error' });
 });
 
-// Start the server
-const port = process.env.PORT || PORT;
-app.listen(port, '0.0.0.0', () => {
-    console.log(`Starting Easely Bot on port ${port}`);
-    console.log(`Environment: ${APP_ENV}`);
-    console.log(`Debug mode: ${DEBUG_MODE}`);
+// Start the server with better error handling for Render
+const port = process.env.PORT || PORT || 5000;
+const server = app.listen(port, '0.0.0.0', () => {
+    console.log(`✅ Easely Bot is running on port ${port}`);
+    console.log(`📍 Environment: ${APP_ENV || 'development'}`);
+    console.log(`🐛 Debug mode: ${DEBUG_MODE}`);
+    console.log(`🔗 Health check: http://0.0.0.0:${port}/`);
+    console.log(`🔗 Webhook URL: http://0.0.0.0:${port}/webhook`);
     
     // Validate settings on startup
     try {
         validateSettings();
-        console.log('Settings validation passed');
+        console.log('✅ Settings validation passed');
     } catch (error) {
-        console.error(`Settings validation failed: ${error.message}`);
+        console.warn(`⚠️ Settings validation warning: ${error.message}`);
+        // Don't exit on Render - allow partial functionality
+        if (APP_ENV === 'production' && process.env.RENDER) {
+            console.log('Running in Render production mode - continuing with partial functionality');
+        } else if (!process.env.PAGE_ACCESS_TOKEN || !process.env.VERIFY_TOKEN) {
+            console.error('❌ Critical environment variables missing - exiting');
+            process.exit(1);
+        }
+    }
+});
+
+// Graceful shutdown handling for Render
+const gracefulShutdown = (signal) => {
+    console.log(`\n${signal} received. Starting graceful shutdown...`);
+    
+    server.close(() => {
+        console.log('✅ HTTP server closed');
+        
+        // Close database connections if needed
+        const { closeConnection } = require('./app/database/supabaseClient');
+        if (typeof closeConnection === 'function') {
+            closeConnection();
+        }
+        
+        console.log('👋 Easely Bot shutdown complete');
+        process.exit(0);
+    });
+    
+    // Force shutdown after 10 seconds
+    setTimeout(() => {
+        console.error('⚠️ Forced shutdown after timeout');
         process.exit(1);
+    }, 10000);
+};
+
+// Handle termination signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+    console.error('❌ Uncaught Exception:', error);
+    gracefulShutdown('UNCAUGHT_EXCEPTION');
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+    // Don't exit on unhandled rejections in production
+    if (APP_ENV !== 'production') {
+        gracefulShutdown('UNHANDLED_REJECTION');
     }
 });

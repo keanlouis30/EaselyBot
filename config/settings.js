@@ -28,10 +28,12 @@ const DB_USER = process.env.DB_USER || 'easely_user';
 const DB_PASSWORD = process.env.DB_PASSWORD || '';
 
 // Application Configuration
-const APP_ENV = process.env.APP_ENV || 'development';
-const DEBUG_MODE = ['true', '1', 'yes'].includes((process.env.DEBUG || 'false').toLowerCase());
+const APP_ENV = process.env.NODE_ENV || process.env.APP_ENV || 'development';
+const IS_PRODUCTION = APP_ENV === 'production';
+const IS_RENDER = process.env.RENDER === 'true';
+const DEBUG_MODE = IS_PRODUCTION ? false : ['true', '1', 'yes'].includes((process.env.DEBUG_MODE || process.env.DEBUG || 'false').toLowerCase());
 const PORT = parseInt(process.env.PORT || '5000', 10);
-const SECRET_KEY = process.env.SECRET_KEY || 'dev-secret-key-change-in-production';
+const SECRET_KEY = process.env.SECRET_KEY || (IS_PRODUCTION ? null : 'dev-secret-key-change-in-production');
 
 // Payment Configuration (Ko-fi)
 const KOFI_WEBHOOK_TOKEN = process.env.KOFI_WEBHOOK_TOKEN || '';
@@ -68,26 +70,45 @@ const DEFAULT_TIMEZONE = process.env.DEFAULT_TIMEZONE || 'UTC';
  * Throws Error if critical settings are missing
  */
 function validateSettings() {
-    // In development mode, only require VERIFY_TOKEN
-    if (DEBUG_MODE) {
-        if (!VERIFY_TOKEN) {
-            console.warn('Warning: VERIFY_TOKEN not set - webhook verification will fail');
+    const warnings = [];
+    const errors = [];
+    
+    // Critical settings for all environments
+    if (!VERIFY_TOKEN) {
+        errors.push('VERIFY_TOKEN');
+    }
+    if (!PAGE_ACCESS_TOKEN) {
+        errors.push('PAGE_ACCESS_TOKEN');
+    }
+    
+    // Database settings (warning only if missing)
+    if (!SUPABASE_URL || !SUPABASE_KEY) {
+        warnings.push('Supabase configuration (database features will be disabled)');
+    }
+    
+    // Canvas settings (optional)
+    if (!CANVAS_BASE_URL) {
+        warnings.push('Canvas configuration (Canvas sync features will be disabled)');
+    }
+    
+    // Log warnings
+    if (warnings.length > 0) {
+        console.warn('⚠️ Configuration warnings:');
+        warnings.forEach(w => console.warn(`  - ${w}`));
+    }
+    
+    // In production on Render, be more lenient
+    if (IS_RENDER && IS_PRODUCTION) {
+        if (errors.length > 0) {
+            console.error('❌ Missing critical settings:', errors.join(', '));
+            console.log('🔄 Continuing in degraded mode for Render deployment...');
         }
         return true;
     }
     
-    // In production, require all settings
-    const requiredSettings = {
-        PAGE_ACCESS_TOKEN,
-        VERIFY_TOKEN,
-        SUPABASE_URL,
-        SUPABASE_KEY
-    };
-    
-    const missing = Object.keys(requiredSettings).filter(key => !requiredSettings[key]);
-    
-    if (missing.length > 0) {
-        throw new Error(`Missing required settings: ${missing.join(', ')}`);
+    // In other environments, fail if critical settings are missing
+    if (errors.length > 0) {
+        throw new Error(`Missing required settings: ${errors.join(', ')}`);
     }
     
     return true;

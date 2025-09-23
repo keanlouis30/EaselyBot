@@ -1,20 +1,35 @@
 services:
   - type: web
     name: easely-bot
-    env: python
+    env: node
     region: oregon
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 1 --timeout 120 main:app
+    buildCommand: npm ci --production
+    startCommand: npm start
     healthCheckPath: /
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.6
+      - key: NODE_VERSION
+        value: 18.19.0
+      - key: NODE_ENV
+        value: production
       - key: APP_ENV
         value: production
-      - key: DEBUG
+      - key: DEBUG_MODE
         value: false
-      - key: PORT
-        value: 10000
+      - key: RENDER
+        value: true
+      # Facebook Messenger Config - Add these in Render Dashboard
+      # - key: PAGE_ACCESS_TOKEN
+      #   sync: false
+      # - key: VERIFY_TOKEN
+      #   sync: false
+      # Supabase Config - Add these in Render Dashboard
+      # - key: SUPABASE_URL
+      #   sync: false
+      # - key: SUPABASE_KEY
+      #   sync: false
+      # Canvas Config - Add these in Render Dashboard
+      # - key: CANVAS_BASE_URL
+      #   sync: false
     # Auto-deploy from main branch
     autoDeploy: true
