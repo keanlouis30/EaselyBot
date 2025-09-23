@@ -8,6 +8,9 @@ const { CANVAS_BASE_URL, CANVAS_API_VERSION } = require('../../config/settings')
 const { getUser } = require('../database/supabaseClient');
 const moment = require('moment-timezone');
 
+// Set default timezone to Manila
+moment.tz.setDefault('Asia/Manila');
+
 /**
  * Create Canvas API client for a specific user
  * @param {string} canvasToken - User's Canvas API token
@@ -180,6 +183,80 @@ async function fetchUpcomingAssignments(facebookId, daysAhead = 7) {
 }
 
 /**
+ * Fetch assignments due today (Manila timezone)
+ * @param {string} facebookId - Facebook user ID
+ * @returns {Promise<Array>} Array of assignment objects
+ */
+async function fetchTodayAssignments(facebookId) {
+    console.log(`\n📅 Fetching today's assignments for user ${facebookId}`);
+    
+    const credentials = await getUserCanvasCredentials(facebookId);
+    
+    if (!credentials) {
+        console.log(`❌ Cannot fetch assignments - no Canvas token found`);
+        throw new Error('Canvas not connected. Please provide your Canvas API token first.');
+    }
+    
+    console.log(`🔗 Using Canvas token from database`);
+    const client = createCanvasClient(credentials.token, credentials.url);
+    const assignments = [];
+    
+    // Get today's date range in Manila timezone
+    const todayStart = moment.tz('Asia/Manila').startOf('day');
+    const todayEnd = moment.tz('Asia/Manila').endOf('day');
+    console.log(`📆 Today's range (Manila): ${todayStart.format('MMM D, h:mm A')} - ${todayEnd.format('h:mm A')}`);
+    
+    try {
+        const coursesResponse = await client.get('/courses', {
+            params: {
+                enrollment_state: 'active',
+                per_page: 100
+            }
+        });
+        
+        const courses = coursesResponse.data || [];
+        
+        for (const course of courses) {
+            try {
+                const assignmentsResponse = await client.get(`/courses/${course.id}/assignments`, {
+                    params: {
+                        per_page: 100,
+                        order_by: 'due_at'
+                    }
+                });
+                
+                const courseAssignments = assignmentsResponse.data || [];
+                
+                // Filter for today's assignments (Manila timezone)
+                const todayAssignments = courseAssignments
+                    .filter(assignment => {
+                        if (!assignment.due_at) return false;
+                        const dueDate = moment.tz(assignment.due_at, 'Asia/Manila');
+                        return dueDate.isBetween(todayStart, todayEnd, 'minute', '[]');
+                    })
+                    .map(assignment => ({
+                        ...assignment,
+                        course_name: course.name,
+                        course_code: course.course_code,
+                        course_id: course.id
+                    }));
+                
+                assignments.push(...todayAssignments);
+            } catch (courseError) {
+                console.error(`Error fetching assignments for course ${course.id}:`, courseError.message);
+            }
+        }
+        
+        assignments.sort((a, b) => moment.tz(a.due_at, 'Asia/Manila').diff(moment.tz(b.due_at, 'Asia/Manila')));
+        console.log(`✅ Found ${assignments.length} assignments due today`);
+        return assignments;
+    } catch (error) {
+        console.error('❌ Error fetching today\'s assignments:', error.message);
+        throw new Error('Failed to fetch today\'s assignments.');
+    }
+}
+
+/**
  * Fetch assignments for this week
  * @param {string} facebookId - Facebook user ID
  * @returns {Promise<Array>} Array of assignment objects
@@ -198,10 +275,10 @@ async function fetchThisWeekAssignments(facebookId) {
     const client = createCanvasClient(credentials.token, credentials.url);
     const assignments = [];
     
-    // Calculate week boundaries
-    const startOfWeek = moment().startOf('week');
-    const endOfWeek = moment().endOf('week');
-    console.log(`📆 Week range: ${startOfWeek.format('MMM D')} - ${endOfWeek.format('MMM D')}`);
+    // Calculate week boundaries in Manila timezone
+    const startOfWeek = moment.tz('Asia/Manila').startOf('week');
+    const endOfWeek = moment.tz('Asia/Manila').endOf('week');
+    console.log(`📆 Week range (Manila): ${startOfWeek.format('MMM D')} - ${endOfWeek.format('MMM D')}`);
     
     try {
         // Get all active courses
@@ -257,6 +334,200 @@ async function fetchThisWeekAssignments(facebookId) {
 }
 
 /**
+ * Fetch assignments for this month (Manila timezone)
+ * @param {string} facebookId - Facebook user ID
+ * @returns {Promise<Array>} Array of assignment objects
+ */
+async function fetchThisMonthAssignments(facebookId) {
+    console.log(`\n📅 Fetching this month's assignments for user ${facebookId}`);
+    
+    const credentials = await getUserCanvasCredentials(facebookId);
+    
+    if (!credentials) {
+        console.log(`❌ Cannot fetch assignments - no Canvas token found`);
+        throw new Error('Canvas not connected. Please provide your Canvas API token first.');
+    }
+    
+    const client = createCanvasClient(credentials.token, credentials.url);
+    const assignments = [];
+    
+    // Get current month boundaries in Manila timezone
+    const monthStart = moment.tz('Asia/Manila').startOf('month');
+    const monthEnd = moment.tz('Asia/Manila').endOf('month');
+    console.log(`📆 Month range (Manila): ${monthStart.format('MMM D')} - ${monthEnd.format('MMM D')}`);
+    
+    try {
+        const coursesResponse = await client.get('/courses', {
+            params: {
+                enrollment_state: 'active',
+                per_page: 100
+            }
+        });
+        
+        const courses = coursesResponse.data || [];
+        
+        for (const course of courses) {
+            try {
+                const assignmentsResponse = await client.get(`/courses/${course.id}/assignments`, {
+                    params: {
+                        per_page: 100,
+                        order_by: 'due_at'
+                    }
+                });
+                
+                const courseAssignments = assignmentsResponse.data || [];
+                
+                // Filter for this month's assignments
+                const monthAssignments = courseAssignments
+                    .filter(assignment => {
+                        if (!assignment.due_at) return false;
+                        const dueDate = moment.tz(assignment.due_at, 'Asia/Manila');
+                        return dueDate.isBetween(monthStart, monthEnd, 'day', '[]');
+                    })
+                    .map(assignment => ({
+                        ...assignment,
+                        course_name: course.name,
+                        course_code: course.course_code,
+                        course_id: course.id
+                    }));
+                
+                assignments.push(...monthAssignments);
+            } catch (courseError) {
+                console.error(`Error fetching assignments for course ${course.id}:`, courseError.message);
+            }
+        }
+        
+        assignments.sort((a, b) => moment.tz(a.due_at, 'Asia/Manila').diff(moment.tz(b.due_at, 'Asia/Manila')));
+        console.log(`✅ Found ${assignments.length} assignments this month`);
+        return assignments;
+    } catch (error) {
+        console.error('❌ Error fetching this month\'s assignments:', error.message);
+        throw new Error('Failed to fetch this month\'s assignments.');
+    }
+}
+
+/**
+ * Fetch overdue assignments (Manila timezone)
+ * @param {string} facebookId - Facebook user ID
+ * @returns {Promise<Array>} Array of assignment objects
+ */
+async function fetchOverdueAssignments(facebookId) {
+    console.log(`\n⚠️ Fetching overdue assignments for user ${facebookId}`);
+    
+    const credentials = await getUserCanvasCredentials(facebookId);
+    
+    if (!credentials) {
+        console.log(`❌ Cannot fetch assignments - no Canvas token found`);
+        throw new Error('Canvas not connected. Please provide your Canvas API token first.');
+    }
+    
+    const client = createCanvasClient(credentials.token, credentials.url);
+    const assignments = [];
+    
+    // Current time in Manila timezone
+    const now = moment.tz('Asia/Manila');
+    console.log(`🕰️ Current time (Manila): ${now.format('MMM D, h:mm A')}`);
+    
+    try {
+        const coursesResponse = await client.get('/courses', {
+            params: {
+                enrollment_state: 'active',
+                per_page: 100
+            }
+        });
+        
+        const courses = coursesResponse.data || [];
+        
+        for (const course of courses) {
+            try {
+                const assignmentsResponse = await client.get(`/courses/${course.id}/assignments`, {
+                    params: {
+                        per_page: 100,
+                        order_by: 'due_at'
+                    }
+                });
+                
+                const courseAssignments = assignmentsResponse.data || [];
+                
+                // Filter for overdue assignments
+                const overdueAssignments = courseAssignments
+                    .filter(assignment => {
+                        if (!assignment.due_at) return false;
+                        const dueDate = moment.tz(assignment.due_at, 'Asia/Manila');
+                        return dueDate.isBefore(now);
+                    })
+                    .map(assignment => ({
+                        ...assignment,
+                        course_name: course.name,
+                        course_code: course.course_code,
+                        course_id: course.id
+                    }));
+                
+                assignments.push(...overdueAssignments);
+            } catch (courseError) {
+                console.error(`Error fetching assignments for course ${course.id}:`, courseError.message);
+            }
+        }
+        
+        // Sort by due date (most recent overdue first)
+        assignments.sort((a, b) => moment.tz(b.due_at, 'Asia/Manila').diff(moment.tz(a.due_at, 'Asia/Manila')));
+        console.log(`✅ Found ${assignments.length} overdue assignments`);
+        return assignments;
+    } catch (error) {
+        console.error('❌ Error fetching overdue assignments:', error.message);
+        throw new Error('Failed to fetch overdue assignments.');
+    }
+}
+
+/**
+ * Create a calendar event/task in Canvas
+ * @param {string} facebookId - Facebook user ID
+ * @param {Object} taskData - Task details { title, description, date, time, courseId }
+ * @returns {Promise<Object>} Created event object
+ */
+async function createCanvasTask(facebookId, taskData) {
+    console.log(`\n➕ Creating Canvas task for user ${facebookId}`);
+    
+    const credentials = await getUserCanvasCredentials(facebookId);
+    
+    if (!credentials) {
+        console.log(`❌ Cannot create task - no Canvas token found`);
+        throw new Error('Canvas not connected. Please provide your Canvas API token first.');
+    }
+    
+    const client = createCanvasClient(credentials.token, credentials.url);
+    
+    try {
+        // Combine date and time in Manila timezone
+        const taskDateTime = moment.tz(`${taskData.date} ${taskData.time}`, 'YYYY-MM-DD HH:mm', 'Asia/Manila');
+        const startAt = taskDateTime.toISOString();
+        const endAt = taskDateTime.clone().add(1, 'hour').toISOString(); // Default 1 hour duration
+        
+        console.log(`📅 Task scheduled for: ${taskDateTime.format('MMM D, h:mm A')} Manila time`);
+        
+        // Create calendar event
+        const eventData = {
+            calendar_event: {
+                context_code: taskData.courseId ? `course_${taskData.courseId}` : `user_${credentials.userId || 'self'}`,
+                title: taskData.title,
+                description: taskData.description || '',
+                start_at: startAt,
+                end_at: endAt,
+                time_zone_edited: 'Asia/Manila'
+            }
+        };
+        
+        const response = await client.post('/calendar_events', eventData);
+        
+        console.log(`✅ Task created successfully with ID: ${response.data.id}`);
+        return response.data;
+    } catch (error) {
+        console.error('❌ Error creating Canvas task:', error.response?.data || error.message);
+        throw new Error('Failed to create task in Canvas. Please try again.');
+    }
+}
+
+/**
  * Fetch a single assignment by ID
  * @param {string} facebookId - Facebook user ID
  * @param {string} courseId - Canvas course ID
@@ -306,13 +577,13 @@ async function testCanvasConnection(canvasToken, canvasUrl = null) {
 }
 
 /**
- * Format assignment for display
+ * Format assignment for display (Manila timezone)
  * @param {Object} assignment - Canvas assignment object
  * @returns {string} Formatted assignment string
  */
 function formatAssignment(assignment) {
-    const dueDate = moment(assignment.due_at);
-    const now = moment();
+    const dueDate = moment.tz(assignment.due_at, 'Asia/Manila');
+    const now = moment.tz('Asia/Manila');
     const daysUntilDue = dueDate.diff(now, 'days');
     const hoursUntilDue = dueDate.diff(now, 'hours');
     
@@ -329,7 +600,7 @@ function formatAssignment(assignment) {
     
     return `📚 ${assignment.name}\n` +
            `📖 ${assignment.course_name}\n` +
-           `⏰ Due: ${dueDate.format('MMM D, h:mm A')} (${timeString})\n` +
+           `⏰ Due: ${dueDate.format('MMM D, h:mm A')} Manila (${timeString})\n` +
            `${assignment.html_url ? `🔗 ${assignment.html_url}` : ''}`;
 }
 
@@ -346,7 +617,7 @@ function formatAssignmentsList(assignments) {
     const formattedList = assignments
         .slice(0, 10) // Limit to 10 assignments to avoid message being too long
         .map((assignment, index) => {
-            const dueDate = moment(assignment.due_at);
+            const dueDate = moment.tz(assignment.due_at, 'Asia/Manila');
             const shortDate = dueDate.format('MMM D');
             const shortTime = dueDate.format('h:mm A');
             return `${index + 1}. ${assignment.name}\n   📖 ${assignment.course_code || assignment.course_name}\n   ⏰ ${shortDate} at ${shortTime}`;
@@ -365,7 +636,11 @@ module.exports = {
     getUserCanvasCredentials,
     fetchUserCourses,
     fetchUpcomingAssignments,
+    fetchTodayAssignments,
     fetchThisWeekAssignments,
+    fetchThisMonthAssignments,
+    fetchOverdueAssignments,
+    createCanvasTask,
     fetchAssignment,
     testCanvasConnection,
     formatAssignment,

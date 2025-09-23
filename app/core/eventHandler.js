@@ -15,11 +15,16 @@ const {
 } = require('../database/supabaseClient');
 const {
     fetchUpcomingAssignments,
+    fetchTodayAssignments,
     fetchThisWeekAssignments,
+    fetchThisMonthAssignments,
+    fetchOverdueAssignments,
+    createCanvasTask,
     testCanvasConnection,
-    formatAssignmentsList
+    formatAssignmentsList,
+    formatAssignment
 } = require('../api/canvasApi');
-const { CANVAS_BASE_URL } = require('../config/settings');
+const { CANVAS_BASE_URL } = require('../../config/settings');
 
 // Store user session data (in production, use proper database)
 const userSessions = {};
@@ -215,6 +220,9 @@ async function handlePostback(senderId, payload) {
         else if (payload === "GET_TASKS_WEEK") {
             await handleGetTasksWeek(senderId);
         }
+        else if (payload === "GET_TASKS_MONTH") {
+            await handleGetTasksMonth(senderId);
+        }
         else if (payload === "GET_TASKS_OVERDUE") {
             await handleGetTasksOverdue(senderId);
         }
@@ -321,7 +329,7 @@ async function isWaitingForToken(senderId) {
 async function isWaitingForTaskTitle(senderId) {
     try {
         const state = await getUserSession(senderId, 'conversation_state');
-        return state === 'waiting_for_task_title';
+        return state === 'creating_task_title' || state === 'waiting_for_task_title';
     } catch {
         return false;
     }
@@ -330,7 +338,7 @@ async function isWaitingForTaskTitle(senderId) {
 async function isWaitingForCustomDate(senderId) {
     try {
         const state = await getUserSession(senderId, 'conversation_state');
-        return state === 'waiting_for_custom_date';
+        return state === 'creating_task_date' || state === 'waiting_for_custom_date';
     } catch {
         return false;
     }
@@ -339,7 +347,7 @@ async function isWaitingForCustomDate(senderId) {
 async function isWaitingForCustomTime(senderId) {
     try {
         const state = await getUserSession(senderId, 'conversation_state');
-        return state === 'waiting_for_custom_time';
+        return state === 'creating_task_time' || state === 'waiting_for_custom_time';
     } catch {
         return false;
     }
@@ -348,7 +356,7 @@ async function isWaitingForCustomTime(senderId) {
 async function isWaitingForTaskDetails(senderId) {
     try {
         const state = await getUserSession(senderId, 'conversation_state');
-        return state === 'waiting_for_task_details';
+        return state === 'creating_task_description' || state === 'waiting_for_task_details';
     } catch {
         return false;
     }
@@ -679,29 +687,27 @@ async function handleTokenInput(senderId, token) {
     }
 }
 
-// Task management handlers with Canvas API integration
+// Task management handlers with Canvas API integration (Manila timezone)
 async function handleGetTasksToday(senderId) {
     try {
         await messengerApi.sendTextMessage(senderId, "🔄 Fetching today's assignments from Canvas...");
         
-        // Fetch assignments due in the next 24 hours
-        const assignments = await fetchUpcomingAssignments(senderId, 1);
+        // Fetch today's assignments in Manila timezone
+        const assignments = await fetchTodayAssignments(senderId);
         
         if (assignments && assignments.length > 0) {
-            // Filter for assignments due today
-            const todayAssignments = assignments.filter(assignment => {
-                const dueDate = moment(assignment.due_at);
-                return dueDate.isSame(moment(), 'day');
-            });
+            await messengerApi.sendTextMessage(
+                senderId,
+                `📚 Found ${assignments.length} assignment${assignments.length > 1 ? 's' : ''} due today:`
+            );
             
-            if (todayAssignments.length > 0) {
-                const formattedList = formatAssignmentsList(todayAssignments);
-                await messengerApi.sendTextMessage(senderId, formattedList);
-            } else {
-                await messengerApi.sendTextMessage(senderId, "✨ No assignments due today! You're all caught up!");
+            // Send each assignment as a separate message
+            for (const assignment of assignments) {
+                const assignmentMessage = formatAssignment(assignment);
+                await messengerApi.sendTextMessage(senderId, assignmentMessage);
             }
         } else {
-            await messengerApi.sendTextMessage(senderId, "✨ No assignments due today! You're all caught up!");
+            await messengerApi.sendTextMessage(senderId, "✅ No assignments due today!");
         }
     } catch (error) {
         console.error(`Error fetching today's tasks for ${senderId}:`, error.message);
@@ -725,17 +731,64 @@ async function handleGetTasksWeek(senderId) {
     try {
         await messengerApi.sendTextMessage(senderId, "🔄 Fetching this week's assignments from Canvas...");
         
-        // Fetch assignments for this week
+        // Fetch assignments for this week in Manila timezone
         const assignments = await fetchThisWeekAssignments(senderId);
         
         if (assignments && assignments.length > 0) {
-            const formattedList = formatAssignmentsList(assignments);
-            await messengerApi.sendTextMessage(senderId, formattedList);
+            await messengerApi.sendTextMessage(
+                senderId,
+                `📅 Found ${assignments.length} assignment${assignments.length > 1 ? 's' : ''} due this week:`
+            );
+            
+            // Send each assignment as a separate message
+            for (const assignment of assignments) {
+                const assignmentMessage = formatAssignment(assignment);
+                await messengerApi.sendTextMessage(senderId, assignmentMessage);
+            }
         } else {
-            await messengerApi.sendTextMessage(senderId, "✨ No assignments due this week! You're ahead of schedule!");
+            await messengerApi.sendTextMessage(senderId, "🎉 No assignments due this week! Time to relax!");
         }
     } catch (error) {
         console.error(`Error fetching week's tasks for ${senderId}:`, error.message);
+        
+        if (error.message.includes('Canvas not connected')) {
+            await messengerApi.sendTextMessage(
+                senderId,
+                "❌ Canvas is not connected. Please set up your Canvas token first.\n\n" +
+                "Use the 'Canvas Setup' option from the menu to connect your account."
+            );
+        } else {
+            await messengerApi.sendTextMessage(
+                senderId,
+                "❌ Unable to fetch assignments. Please check your Canvas connection or try again later."
+            );
+        }
+    }
+}
+
+async function handleGetTasksMonth(senderId) {
+    try {
+        await messengerApi.sendTextMessage(senderId, "🔄 Fetching this month's assignments from Canvas...");
+        
+        // Fetch assignments for this month in Manila timezone
+        const assignments = await fetchThisMonthAssignments(senderId);
+        
+        if (assignments && assignments.length > 0) {
+            await messengerApi.sendTextMessage(
+                senderId,
+                `🗓️ Found ${assignments.length} assignment${assignments.length > 1 ? 's' : ''} due this month:`
+            );
+            
+            // Send each assignment as a separate message
+            for (const assignment of assignments) {
+                const assignmentMessage = formatAssignment(assignment);
+                await messengerApi.sendTextMessage(senderId, assignmentMessage);
+            }
+        } else {
+            await messengerApi.sendTextMessage(senderId, "✨ No assignments due this month!");
+        }
+    } catch (error) {
+        console.error(`Error fetching month's tasks for ${senderId}:`, error.message);
         
         if (error.message.includes('Canvas not connected')) {
             await messengerApi.sendTextMessage(
@@ -756,24 +809,19 @@ async function handleGetTasksOverdue(senderId) {
     try {
         await messengerApi.sendTextMessage(senderId, "🔄 Checking for overdue assignments...");
         
-        // Fetch all assignments and filter for overdue
-        const assignments = await fetchUpcomingAssignments(senderId, 30); // Get last 30 days worth
+        // Fetch overdue assignments using Manila timezone
+        const assignments = await fetchOverdueAssignments(senderId);
         
         if (assignments && assignments.length > 0) {
-            const now = moment();
-            const overdueAssignments = assignments.filter(assignment => {
-                const dueDate = moment(assignment.due_at);
-                return dueDate.isBefore(now);
-            });
+            await messengerApi.sendTextMessage(
+                senderId,
+                `⚠️ You have ${assignments.length} overdue assignment${assignments.length > 1 ? 's' : ''}:`
+            );
             
-            if (overdueAssignments.length > 0) {
-                const formattedList = formatAssignmentsList(overdueAssignments);
-                await messengerApi.sendTextMessage(
-                    senderId,
-                    "⚠️ **Overdue Assignments:**\n\n" + formattedList
-                );
-            } else {
-                await messengerApi.sendTextMessage(senderId, "✅ No overdue assignments! Great job staying on top of things!");
+            // Send each assignment as a separate message
+            for (const assignment of assignments) {
+                const assignmentMessage = formatAssignment(assignment);
+                await messengerApi.sendTextMessage(senderId, assignmentMessage);
             }
         } else {
             await messengerApi.sendTextMessage(senderId, "✅ No overdue assignments! Great job staying on top of things!");
@@ -804,13 +852,26 @@ async function handleGetTasksAll(senderId) {
         const assignments = await fetchUpcomingAssignments(senderId, 30);
         
         if (assignments && assignments.length > 0) {
-            const formattedList = formatAssignmentsList(assignments);
-            await messengerApi.sendTextMessage(senderId, formattedList);
+            // Limit to first 10 for readability
+            const displayLimit = 10;
+            const assignmentsToShow = assignments.slice(0, displayLimit);
             
-            if (assignments.length > 10) {
+            await messengerApi.sendTextMessage(
+                senderId,
+                `📚 Found ${assignments.length} upcoming assignment${assignments.length > 1 ? 's' : ''}. ` +
+                (assignments.length > displayLimit ? `Showing first ${displayLimit}:` : '')
+            );
+            
+            // Send each assignment as a separate message
+            for (const assignment of assignmentsToShow) {
+                const assignmentMessage = formatAssignment(assignment);
+                await messengerApi.sendTextMessage(senderId, assignmentMessage);
+            }
+            
+            if (assignments.length > displayLimit) {
                 await messengerApi.sendTextMessage(
                     senderId,
-                    `📊 Showing first 10 of ${assignments.length} assignments. Check Canvas for complete list.`
+                    `📊 ${assignments.length - displayLimit} more assignment${assignments.length - displayLimit > 1 ? 's' : ''} not shown. Check Canvas for complete list.`
                 );
             }
         } else {
@@ -835,7 +896,21 @@ async function handleGetTasksAll(senderId) {
 }
 
 async function handleAddNewTask(senderId) {
-    await messengerApi.sendTextMessage(senderId, "This feature will be available soon! Stay tuned!");
+    try {
+        // Initialize task creation flow
+        await setUserState(senderId, "creating_task_title");
+        await messengerApi.sendTextMessage(
+            senderId,
+            "📝 Let's create a new task in Canvas!\n\n" +
+            "First, what's the title of your task?"
+        );
+    } catch (error) {
+        console.error(`Error starting task creation for ${senderId}:`, error.message);
+        await messengerApi.sendTextMessage(
+            senderId,
+            "Sorry, something went wrong. Please try again."
+        );
+    }
 }
 
 // Placeholder handlers for other functionality
@@ -965,25 +1040,167 @@ async function getUserJoinDate(senderId) {
     }
 }
 
-// Placeholder task input handlers
+// Task creation input handlers
 async function handleTaskTitleInput(senderId, text) {
-    await messengerApi.sendTextMessage(senderId, "Task creation coming soon!");
-    await clearUserState(senderId);
+    try {
+        // Store the task title
+        await setUserSession(senderId, 'task_title', text);
+        await setUserState(senderId, 'creating_task_date');
+        
+        await messengerApi.sendTextMessage(
+            senderId,
+            `Great! Task title: "${text}"\n\n` +
+            "📅 When is this task due?\n" +
+            "Please enter the date (e.g., 'tomorrow', 'next Monday', 'Dec 25', '2024-12-25')"
+        );
+    } catch (error) {
+        console.error(`Error handling task title for ${senderId}:`, error.message);
+        await clearUserState(senderId);
+        await messengerApi.sendTextMessage(senderId, "Sorry, something went wrong. Please try again.");
+    }
 }
 
 async function handleCustomDateInput(senderId, text) {
-    await messengerApi.sendTextMessage(senderId, "Custom date input coming soon!");
-    await clearUserState(senderId);
+    try {
+        // Parse the date input
+        let taskDate;
+        const input = text.toLowerCase().trim();
+        
+        if (input === 'tomorrow') {
+            taskDate = moment.tz('Asia/Manila').add(1, 'day');
+        } else if (input === 'today') {
+            taskDate = moment.tz('Asia/Manila');
+        } else if (input.includes('next')) {
+            // Handle "next Monday", "next week", etc.
+            const weekdays = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+            const weekday = input.replace('next ', '').toLowerCase();
+            
+            if (weekdays.includes(weekday)) {
+                // Get next occurrence of the weekday (moment.js: Sunday = 0, Monday = 1, etc.)
+                const currentDay = moment.tz('Asia/Manila').day();
+                const targetDay = weekdays.indexOf(weekday);
+                let daysToAdd = targetDay - currentDay;
+                if (daysToAdd <= 0) daysToAdd += 7; // If it's today or in the past, get next week's occurrence
+                taskDate = moment.tz('Asia/Manila').add(daysToAdd, 'days');
+            } else if (weekday === 'week') {
+                taskDate = moment.tz('Asia/Manila').add(1, 'week');
+            } else {
+                taskDate = moment.tz('Asia/Manila'); // Default to today if can't parse
+                taskDate = null; // Mark as invalid
+            }
+        } else {
+            // Try to parse as date
+            taskDate = moment.tz(text, ['YYYY-MM-DD', 'MM-DD-YYYY', 'MMM DD', 'MMMM DD'], 'Asia/Manila');
+        }
+        
+        if (!taskDate || !taskDate.isValid()) {
+            await messengerApi.sendTextMessage(
+                senderId,
+                "❌ I couldn't understand that date. Please try again.\n" +
+                "Examples: 'tomorrow', 'Dec 25', '2024-12-25'"
+            );
+            return;
+        }
+        
+        // Store the date
+        await setUserSession(senderId, 'task_date', taskDate.format('YYYY-MM-DD'));
+        await setUserState(senderId, 'creating_task_time');
+        
+        await messengerApi.sendTextMessage(
+            senderId,
+            `📅 Date set: ${taskDate.format('MMMM D, YYYY')}\n\n` +
+            "⏰ What time is it due?\n" +
+            "Please enter the time (e.g., '3pm', '15:00', '11:59 PM')"
+        );
+    } catch (error) {
+        console.error(`Error handling task date for ${senderId}:`, error.message);
+        await clearUserState(senderId);
+        await messengerApi.sendTextMessage(senderId, "Sorry, something went wrong. Please try again.");
+    }
 }
 
 async function handleCustomTimeInput(senderId, text) {
-    await messengerApi.sendTextMessage(senderId, "Custom time input coming soon!");
-    await clearUserState(senderId);
+    try {
+        // Parse time input
+        const timeFormats = ['h:mm A', 'H:mm', 'ha', 'h a', 'HH:mm'];
+        let taskTime = moment.tz(text, timeFormats, 'Asia/Manila');
+        
+        if (!taskTime.isValid()) {
+            await messengerApi.sendTextMessage(
+                senderId,
+                "❌ I couldn't understand that time. Please try again.\n" +
+                "Examples: '3pm', '15:00', '11:59 PM'"
+            );
+            return;
+        }
+        
+        // Store the time
+        await setUserSession(senderId, 'task_time', taskTime.format('HH:mm'));
+        await setUserState(senderId, 'creating_task_description');
+        
+        await messengerApi.sendTextMessage(
+            senderId,
+            `⏰ Time set: ${taskTime.format('h:mm A')}\n\n` +
+            "📝 Would you like to add a description? (optional)\n" +
+            "Type your description or 'skip' to create the task without one."
+        );
+    } catch (error) {
+        console.error(`Error handling task time for ${senderId}:`, error.message);
+        await clearUserState(senderId);
+        await messengerApi.sendTextMessage(senderId, "Sorry, something went wrong. Please try again.");
+    }
 }
 
 async function handleTaskDetailsInput(senderId, text) {
-    await messengerApi.sendTextMessage(senderId, "Task details input coming soon!");
-    await clearUserState(senderId);
+    try {
+        const title = await getUserSession(senderId, 'task_title');
+        const date = await getUserSession(senderId, 'task_date');
+        const time = await getUserSession(senderId, 'task_time');
+        
+        let description = '';
+        if (text.toLowerCase() !== 'skip') {
+            description = text;
+        }
+        
+        // Create the task in Canvas
+        await messengerApi.sendTextMessage(senderId, "🔄 Creating your task in Canvas...");
+        
+        const taskData = {
+            title,
+            description,
+            date,
+            time
+        };
+        
+        const createdTask = await createCanvasTask(senderId, taskData);
+        
+        // Format the created task details
+        const taskDateTime = moment.tz(`${date} ${time}`, 'YYYY-MM-DD HH:mm', 'Asia/Manila');
+        
+        await messengerApi.sendTextMessage(
+            senderId,
+            "✅ Task created successfully in Canvas!\n\n" +
+            `📝 Title: ${title}\n` +
+            `📅 Due: ${taskDateTime.format('MMMM D, YYYY at h:mm A')} Manila\n` +
+            (description ? `📔 Description: ${description}\n` : '') +
+            "\nYour task will appear in your Canvas calendar and will be included in future assignment fetches!"
+        );
+        
+        // Clear the state and session data
+        await clearUserState(senderId);
+        await clearUserSession(senderId);
+        
+        // Show main menu
+        await messengerApi.sendMainMenu(senderId);
+        
+    } catch (error) {
+        console.error(`Error creating task for ${senderId}:`, error.message);
+        await clearUserState(senderId);
+        await messengerApi.sendTextMessage(
+            senderId,
+            "❌ Failed to create task in Canvas. " + error.message
+        );
+    }
 }
 
 module.exports = {
