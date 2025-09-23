@@ -1086,13 +1086,11 @@ async function handleCanvasToken(senderId, token) {
     }
     
     // Token is valid, store it without fetching all assignments
-    updateUser(senderId, {
-      canvasToken: token,
-      isOnboarded: true,
-      canvasUser: validation.user,
-      assignments: [], // Start with empty assignments
-      assignmentCache: {}, // Cache for fetched assignments
-      lastSync: null // Will be updated when actually fetching data
+    await updateUser(senderId, {
+      canvas_token: token,
+      is_onboarded: true,
+      canvas_user_name: validation.user.name,
+      canvas_user_id: validation.user.id
     });
     
     // Send success message without listing assignments
@@ -1168,7 +1166,7 @@ async function sendTaskTimeRequest(senderId) {
 }
 
 async function createTask(senderId, title, timeInput) {
-  const user = getUser(senderId);
+  const user = await getUser(senderId);
   if (user) {
     // Handle both Date objects and strings
     let dueDate, dueDateText;
@@ -1194,7 +1192,7 @@ async function createTask(senderId, title, timeInput) {
     };
     
     user.assignments.push(newTask);
-    updateUser(senderId, { assignments: user.assignments });
+    await updateUser(senderId, { assignments: user.assignments });
     
     const message = {
       recipient: { id: senderId },
@@ -1214,8 +1212,8 @@ async function createTask(senderId, title, timeInput) {
 
 // Create a Planner Note (To-Do) in Canvas
 async function createCanvasPlannerNote(senderId, { title, description, dueDate, courseId, courseName }) {
-  const user = getUser(senderId);
-  if (!user || !user.canvasToken) {
+  const user = await getUser(senderId);
+  if (!user || !user.canvas_token) {
     await sendMessage({ recipient: { id: senderId }, message: { text: '❌ No Canvas token found. Please set up Canvas first from the menu: Canvas Setup.' } });
     return null;
   }
@@ -1243,7 +1241,7 @@ async function createCanvasPlannerNote(senderId, { title, description, dueDate, 
     
     const plannerResponse = await axios.post(`${canvasUrl}/api/v1/planner_notes`, plannerBody, {
       headers: {
-        'Authorization': `Bearer ${user.canvasToken}`,
+        'Authorization': `Bearer ${user.canvas_token}`,
         'Content-Type': 'application/json'
       },
       timeout: 15000
@@ -1299,7 +1297,7 @@ async function createCanvasPlannerNote(senderId, { title, description, dueDate, 
       
       const eventResponse = await axios.post(`${canvasUrl}/api/v1/calendar_events`, eventBody, {
         headers: {
-          'Authorization': `Bearer ${user.canvasToken}`,
+          'Authorization': `Bearer ${user.canvas_token}`,
           'Content-Type': 'application/json'
         },
         timeout: 15000
@@ -1348,7 +1346,7 @@ async function createCanvasPlannerNote(senderId, { title, description, dueDate, 
           
           const assignmentResponse = await axios.post(`${canvasUrl}/api/v1/courses/${courseId}/assignments`, assignmentBody, {
             headers: {
-              'Authorization': `Bearer ${user.canvasToken}`,
+              'Authorization': `Bearer ${user.canvas_token}`,
               'Content-Type': 'application/json'
             },
             timeout: 15000
@@ -1392,15 +1390,15 @@ async function createCanvasPlannerNote(senderId, { title, description, dueDate, 
 
 // Fetch recent Planner Notes to verify visibility (debug/helper)
 async function fetchRecentPlannerNotes(senderId, { perPage = 5 } = {}) {
-  const user = getUser(senderId);
-  if (!user || !user.canvasToken) {
+  const user = await getUser(senderId);
+  if (!user || !user.canvas_token) {
     await sendMessage({ recipient: { id: senderId }, message: { text: '❌ No Canvas token found. Please set up Canvas first from the menu: Canvas Setup.' } });
     return [];
   }
   const canvasUrl = process.env.CANVAS_BASE_URL || 'https://dlsu.instructure.com';
   try {
     const resp = await axios.get(`${canvasUrl}/api/v1/planner_notes`, {
-      headers: { 'Authorization': `Bearer ${user.canvasToken}` },
+      headers: { 'Authorization': `Bearer ${user.canvas_token}` },
       params: { per_page: perPage },
       timeout: 10000
     });
@@ -1526,9 +1524,9 @@ function formatDateTimeManila(date) {
 
 // Task display functions
 async function sendTasksToday(senderId) {
-  const user = getUser(senderId);
+  const user = await getUser(senderId);
   
-  if (!user || !user.canvasToken) {
+  if (!user || !user.canvas_token) {
     await sendMessage({
       recipient: { id: senderId },
       message: { text: "❌ No Canvas token found. Please add your Canvas token to sync assignments!" }
@@ -1544,7 +1542,7 @@ async function sendTasksToday(senderId) {
   
   try {
     // Fetch fresh data from Canvas
-    const canvasData = await fetchCanvasAssignments(user.canvasToken);
+    const canvasData = await fetchCanvasAssignments(user.canvas_token);
     const todayManila = getManilaDate();
     
     const todayCanvasTasks = canvasData.assignments.filter(assignment => {
@@ -1633,9 +1631,9 @@ async function sendTasksToday(senderId) {
 }
 
 async function sendTasksWeek(senderId) {
-  const user = getUser(senderId);
+  const user = await getUser(senderId);
   
-  if (!user || !user.canvasToken) {
+  if (!user || !user.canvas_token) {
     await sendMessage({
       recipient: { id: senderId },
       message: { text: "❌ No Canvas token found. Please add your Canvas token to sync assignments!" }
@@ -1651,7 +1649,7 @@ async function sendTasksWeek(senderId) {
   
   try {
     // Fetch fresh data from Canvas
-    const canvasData = await fetchCanvasAssignments(user.canvasToken);
+    const canvasData = await fetchCanvasAssignments(user.canvas_token);
     const todayManila = getManilaDate();
     const nextWeekManila = getManilaDate();
     nextWeekManila.setDate(nextWeekManila.getDate() + 7);
@@ -1756,9 +1754,9 @@ async function sendTasksWeek(senderId) {
 }
 
 async function sendOverdueTasks(senderId) {
-  const user = getUser(senderId);
+  const user = await getUser(senderId);
   
-  if (!user || !user.canvasToken) {
+  if (!user || !user.canvas_token) {
     await sendMessage({
       recipient: { id: senderId },
       message: { text: "❌ No Canvas token found. Please add your Canvas token to sync assignments!" }
@@ -1774,7 +1772,7 @@ async function sendOverdueTasks(senderId) {
   
   try {
     // Fetch fresh data from Canvas
-    const canvasData = await fetchCanvasAssignments(user.canvasToken);
+    const canvasData = await fetchCanvasAssignments(user.canvas_token);
     const nowManila = getManilaDate();
     const cutoffDate = getManilaDate();
     cutoffDate.setDate(cutoffDate.getDate() - 300); // 300 days ago
@@ -1855,9 +1853,9 @@ async function sendOverdueTasks(senderId) {
 }
 
 async function sendAllUpcoming(senderId) {
-  const user = getUser(senderId);
+  const user = await getUser(senderId);
   
-  if (!user || !user.canvasToken) {
+  if (!user || !user.canvas_token) {
     await sendMessage({
       recipient: { id: senderId },
       message: { text: "❌ No Canvas token found. Please add your Canvas token to sync assignments!" }
@@ -1873,7 +1871,7 @@ async function sendAllUpcoming(senderId) {
   
   try {
     // Fetch fresh data from Canvas
-    const canvasData = await fetchCanvasAssignments(user.canvasToken);
+    const canvasData = await fetchCanvasAssignments(user.canvas_token);
     const nowManila = getManilaDate();
     
     const upcomingTasks = canvasData.assignments.filter(assignment => {
@@ -1993,13 +1991,13 @@ async function sendActivationMessage(senderId) {
 
 // Prompt for course selection using user's Canvas courses
 async function sendCourseSelection(senderId) {
-  const user = getUser(senderId);
-  if (!user || !user.canvasToken) {
+  const user = await getUser(senderId);
+  if (!user || !user.canvas_token) {
     await sendMessage({ recipient: { id: senderId }, message: { text: "❌ No Canvas token found. Please set up Canvas first from the menu: Canvas Setup." } });
     return;
   }
   try {
-    const courses = await listUserCourses(user.canvasToken);
+    const courses = await listUserCourses(user.canvas_token);
     const quickReplies = [];
     // Add up to 10 courses as quick replies
     courses.slice(0, 10).forEach(c => {
@@ -2071,9 +2069,9 @@ async function sendMyTasks(senderId) {
 }
 
 async function sendCanvasSetup(senderId) {
-  const user = getUser(senderId);
+  const user = await getUser(senderId);
   
-  if (!user || !user.canvasToken) {
+  if (!user || !user.canvas_token) {
     const message = {
       recipient: { id: senderId },
       message: {
@@ -2103,7 +2101,7 @@ async function sendCanvasSetup(senderId) {
     const message = {
       recipient: { id: senderId },
       message: {
-        text: `🔧 Canvas Setup\n\n✅ Connected as: ${user.canvasUser?.name || 'Canvas User'}\n\nYour Canvas account is already connected and working properly!\n\nWhat would you like to do?`,
+        text: `🔧 Canvas Setup\n\n✅ Connected as: ${user.canvas_user_name || 'Canvas User'}\n\nYour Canvas account is already connected and working properly!\n\nWhat would you like to do?`,
         quick_replies: [
           {
             content_type: "text",
@@ -2167,9 +2165,9 @@ async function sendHelpAndSupport(senderId) {
 }
 
 async function sendUpgradeToPremium(senderId) {
-  const user = getUser(senderId);
+  const user = await getUser(senderId);
   
-  if (user?.subscriptionTier === 'premium') {
+  if (user?.subscription_tier === 'premium') {
     const message = {
       recipient: { id: senderId },
       message: {
@@ -2215,9 +2213,9 @@ async function sendUpgradeToPremium(senderId) {
 
 // Additional helper functions for Help & Support menu
 async function testCanvasConnection(senderId) {
-  const user = getUser(senderId);
+  const user = await getUser(senderId);
   
-  if (!user || !user.canvasToken) {
+  if (!user || !user.canvas_token) {
     await sendMessage({
       recipient: { id: senderId },
       message: { text: "No Canvas token found. Please set up Canvas first!\n\nUse 'Canvas Setup' from the menu to connect your account." }
@@ -2231,11 +2229,11 @@ async function testCanvasConnection(senderId) {
   });
   
   try {
-    const validation = await validateCanvasToken(user.canvasToken);
+    const validation = await validateCanvasToken(user.canvas_token);
     
     if (validation.valid) {
       // Check permissions for task creation
-      await checkCanvasPermissions(user.canvasToken);
+      await checkCanvasPermissions(user.canvas_token);
       
       const canvasUrl = process.env.CANVAS_BASE_URL || 'https://dlsu.instructure.com';
       const successMessage = `✅ Connection successful!\n\n👤 Connected as: ${validation.user.name}\n🌐 Canvas URL: ${canvasUrl}\n\n💡 Your Canvas connection is working. If task creation fails, it might be due to API permissions on your Canvas token.`;
@@ -2281,7 +2279,7 @@ async function sendReportProblem(senderId) {
   });
   
   // Could set a session to capture the problem description
-  setUserSession(senderId, { flow: 'report_problem', step: 'description' });
+  await setUserSession(senderId, { flow: 'report_problem', step: 'description' });
 }
 
 async function sendFeatureRequest(senderId) {
@@ -2293,7 +2291,7 @@ async function sendFeatureRequest(senderId) {
   });
   
   // Could set a session to capture the feature request
-  setUserSession(senderId, { flow: 'feature_request', step: 'description' });
+  await setUserSession(senderId, { flow: 'feature_request', step: 'description' });
 }
 
 async function sendContactSupport(senderId) {
@@ -2334,7 +2332,7 @@ async function sendGenericResponse(senderId) {
 
 // Handle task date quick replies
 async function handleTaskDateQuickReply(senderId, dateType) {
-  const session = getUserSession(senderId);
+  const session = await getUserSession(senderId);
   if (!session || session.flow !== 'add_task' || session.step !== 'date') {
     await sendGenericResponse(senderId);
     return;
@@ -2390,13 +2388,13 @@ async function handleTaskDateQuickReply(senderId, dateType) {
   }
   
   // Store date and ask for time
-  setUserSession(senderId, { ...session, step: 'time', taskDate });
+  await setUserSession(senderId, { ...session, step: 'time', taskDate });
   await sendTaskTimeRequest(senderId);
 }
 
 // Handle task time quick replies
 async function handleTaskTimeQuickReply(senderId, hour, minute) {
-  const session = getUserSession(senderId);
+  const session = await getUserSession(senderId);
   if (!session || session.flow !== 'add_task' || session.step !== 'time' || !session.taskDate) {
     await sendGenericResponse(senderId);
     return;
