@@ -782,6 +782,50 @@ async function validateCanvasToken(token) {
   }
 }
 
+// Check Canvas token permissions for task creation
+async function checkCanvasPermissions(token) {
+  const canvasUrl = process.env.CANVAS_BASE_URL || 'https://dlsu.instructure.com';
+  
+  try {
+    // Test basic user access
+    const userResponse = await axios.get(`${canvasUrl}/api/v1/users/self`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+      timeout: 10000
+    });
+    
+    console.log('Canvas user info:', userResponse.data);
+    
+    // Test planner notes access
+    try {
+      const plannerResponse = await axios.get(`${canvasUrl}/api/v1/planner_notes`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+        params: { per_page: 1 },
+        timeout: 10000
+      });
+      console.log('Planner Notes API accessible:', plannerResponse.status === 200);
+    } catch (plannerError) {
+      console.log('Planner Notes API error:', plannerError.response?.status, plannerError.response?.data);
+    }
+    
+    // Test calendar events access
+    try {
+      const calendarResponse = await axios.get(`${canvasUrl}/api/v1/calendar_events`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+        params: { per_page: 1 },
+        timeout: 10000
+      });
+      console.log('Calendar Events API accessible:', calendarResponse.status === 200);
+    } catch (calendarError) {
+      console.log('Calendar Events API error:', calendarError.response?.status, calendarError.response?.data);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Canvas permissions check failed:', error.response?.data || error.message);
+    return false;
+  }
+}
+
 async function fetchCanvasAssignments(token, options = {}) {
   const canvasUrl = process.env.CANVAS_BASE_URL || 'https://dlsu.instructure.com';
   const { daysAhead = 30, includeOverdue = true } = options;
@@ -1104,34 +1148,144 @@ async function createCanvasPlannerNote(senderId, { title, description, dueDate, 
     await sendMessage({ recipient: { id: senderId }, message: { text: '❌ No Canvas token found. Please set up Canvas first from the menu: Canvas Setup.' } });
     return;
   }
+  
   const canvasUrl = process.env.CANVAS_BASE_URL || 'https://dlsu.instructure.com';
-  const body = {
-    title: title,
-    details: description || '',
-    todo_date: dueDate.toISOString(),
-  };
-  if (courseId) body.course_id = courseId;
-
+  const whenText = formatDateTimeManila(dueDate);
+  const courseLabel = courseId ? (courseName || 'Selected Course') : 'Personal';
+  
+  // Send loading message first
+  await sendMessage({
+    recipient: { id: senderId },
+    message: { text: `🔄 Creating task in Canvas dashboard...` }
+  });
+  
   try {
-    await axios.post(`${canvasUrl}/api/v1/planner_notes`, body, {
+    // Try creating as Planner Note first
+    const plannerBody = {
+      title: title,
+      details: description || '',
+      todo_date: dueDate.toISOString()
+    };
+    if (courseId) plannerBody.course_id = courseId;
+    
+    console.log('Creating Canvas Planner Note:', plannerBody);
+    
+    const plannerResponse = await axios.post(`${canvasUrl}/api/v1/planner_notes`, plannerBody, {
       headers: {
         'Authorization': `Bearer ${user.canvasToken}`,
         'Content-Type': 'application/json'
       },
-      timeout: 10000
+      timeout: 15000
     });
-
-    const whenText = formatDateTimeManila(dueDate);
-    const courseLabel = courseId ? (courseName || 'Selected Course') : 'Personal';
-
+    
+    console.log('Planner Note created successfully:', plannerResponse.data);
+    
     await sendMessage({
       recipient: { id: senderId },
-      message: { text: `✅ Task created in Canvas!\n\n📝 "${title}"\n📚 ${courseLabel}\n⏰ Due: ${whenText}` }
+      message: { 
+        text: `✅ Task created in Canvas Planner!\n\n📝 "${title}"\n📚 ${courseLabel}\n⏰ Due: ${whenText}\n\n💡 Check your Canvas Dashboard > Planner or To-Do list to see the task.` 
+      }
     });
-  } catch (error) {
-    console.error('Failed to create planner note:', error.response?.data || error.message);
-    await sendMessage({ recipient: { id: senderId }, message: { text: '❌ I could not create this task in Canvas. Please try again later.' } });
+    
+  } catch (plannerError) {
+    console.error('Planner Note creation failed:', plannerError.response?.data || plannerError.message);
+    
+    // If Planner Notes fail, try creating as Calendar Event
+    try {
+      const eventBody = {
+        calendar_event: {
+          title: `📝 ${title}`,
+          description: description ? `Task: ${title}\n\nDescription: ${description}` : `Task: ${title}`,
+          start_at: dueDate.toISOString(),
+          end_at: new Date(dueDate.getTime() + 60 * 60 * 1000).toISOString(), // 1 hour duration
+          all_day: false
+        }
+      };
+      
+      if (courseId) {
+        eventBody.calendar_event.context_code = `course_${courseId}`;
+      }
+      
+      console.log('Creating Canvas Calendar Event as fallback:', eventBody);
+      
+      const eventResponse = await axios.post(`${canvasUrl}/api/v1/calendar_events`, eventBody, {
+        headers: {
+          'Authorization': `Bearer ${user.canvasToken}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 15000
+      });
+      
+      console.log('Calendar Event created successfully:', eventResponse.data);
+      
+      await sendMessage({
+        recipient: { id: senderId },
+        message: { 
+          text: `✅ Task created as Canvas Calendar Event!\n\n📝 "${title}"\n📚 ${courseLabel}\n⏰ Due: ${whenText}\n\n💡 Check your Canvas Calendar to see the task.` 
+        }
+      });
+      
+    } catch (eventError) {
+      console.error('Calendar Event creation also failed:', eventError.response?.data || eventError.message);
+      
+      // If both methods fail, try creating as Assignment (if course is specified)
+      if (courseId) {
+        try {
+          const assignmentBody = {
+            assignment: {
+              name: title,
+              description: description ? `${description}\n\n(Created via EaselyBot)` : '(Created via EaselyBot)',
+              due_at: dueDate.toISOString(),
+              points_possible: 0,
+              submission_types: ['none'],
+              published: false // Create as unpublished so it doesn't notify all students
+            }
+          };
+          
+          console.log('Creating Canvas Assignment as final fallback:', assignmentBody);
+          
+          const assignmentResponse = await axios.post(`${canvasUrl}/api/v1/courses/${courseId}/assignments`, assignmentBody, {
+            headers: {
+              'Authorization': `Bearer ${user.canvasToken}`,
+              'Content-Type': 'application/json'
+            },
+            timeout: 15000
+          });
+          
+          console.log('Assignment created successfully:', assignmentResponse.data);
+          
+          await sendMessage({
+            recipient: { id: senderId },
+            message: { 
+              text: `✅ Task created as unpublished Canvas Assignment!\n\n📝 "${title}"\n📚 ${courseLabel}\n⏰ Due: ${whenText}\n\n💡 Check your course assignments or gradebook to see the task.` 
+            }
+          });
+          
+        } catch (assignmentError) {
+          console.error('Assignment creation also failed:', assignmentError.response?.data || assignmentError.message);
+          await sendCanvasCreationFailure(senderId, title, courseLabel, whenText, assignmentError);
+        }
+      } else {
+        await sendCanvasCreationFailure(senderId, title, courseLabel, whenText, eventError);
+      }
+    }
   }
+}
+
+// Handle Canvas creation failure with detailed error message
+async function sendCanvasCreationFailure(senderId, title, courseLabel, whenText, error) {
+  const errorDetails = error.response?.data ? 
+    (typeof error.response.data === 'string' ? error.response.data : JSON.stringify(error.response.data)) : 
+    error.message;
+  
+  console.error('All Canvas creation methods failed. Error details:', errorDetails);
+  
+  await sendMessage({ 
+    recipient: { id: senderId }, 
+    message: { 
+      text: `❌ Could not create task in Canvas Dashboard.\n\n📝 Task: "${title}"\n📚 Course: ${courseLabel}\n⏰ Due: ${whenText}\n\n🔧 This might be due to:\n• Canvas API permissions\n• Network connectivity\n• Canvas server issues\n\nPlease add this task manually to your Canvas or try again later.` 
+    } 
+  });
 }
 
 // List user's active courses (id, name)
@@ -1896,15 +2050,18 @@ async function testCanvasConnection(senderId) {
   
   await sendMessage({
     recipient: { id: senderId },
-    message: { text: "Testing your Canvas connection..." }
+    message: { text: "🔍 Testing your Canvas connection and permissions..." }
   });
   
   try {
     const validation = await validateCanvasToken(user.canvasToken);
     
     if (validation.valid) {
+      // Check permissions for task creation
+      await checkCanvasPermissions(user.canvasToken);
+      
       const canvasUrl = process.env.CANVAS_BASE_URL || 'https://dlsu.instructure.com';
-      const successMessage = 'Connection successful!\n\nConnected as: ' + validation.user.name + '\nCanvas URL: ' + canvasUrl + '\n\nYour Canvas sync is working properly!';
+      const successMessage = `✅ Connection successful!\n\n👤 Connected as: ${validation.user.name}\n🌐 Canvas URL: ${canvasUrl}\n\n💡 Your Canvas connection is working. If task creation fails, it might be due to API permissions on your Canvas token.`;
       await sendMessage({
         recipient: { id: senderId },
         message: { text: successMessage }
@@ -1912,13 +2069,13 @@ async function testCanvasConnection(senderId) {
     } else {
       await sendMessage({
         recipient: { id: senderId },
-        message: { text: 'Connection failed: ' + validation.error + '\n\nPlease try reconnecting your Canvas account.' }
+        message: { text: `❌ Connection failed: ${validation.error}\n\nPlease try reconnecting your Canvas account.` }
       });
     }
   } catch (error) {
     await sendMessage({
       recipient: { id: senderId },
-      message: { text: 'Connection test failed: ' + error.message + '\n\nPlease check your internet connection and try again.' }
+      message: { text: `❌ Connection test failed: ${error.message}\n\nPlease check your internet connection and try again.` }
     });
   }
 }
