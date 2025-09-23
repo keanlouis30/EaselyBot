@@ -462,18 +462,47 @@ async function fetchCanvasAssignments(token) {
 }
 
 function formatDueDate(date) {
+  // Convert to Manila timezone
+  const manilaTimeOptions = { timeZone: 'Asia/Manila' };
   const now = new Date();
-  const diffMs = date.getTime() - now.getTime();
+  const nowManila = new Date(now.toLocaleString('en-US', manilaTimeOptions));
+  const dueDateManila = new Date(date.toLocaleString('en-US', manilaTimeOptions));
+  
+  const diffMs = dueDateManila.getTime() - nowManila.getTime();
   const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
   
+  const timeFormatOptions = {
+    timeZone: 'Asia/Manila',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  };
+  
+  const dateTimeFormatOptions = {
+    timeZone: 'Asia/Manila',
+    weekday: 'long',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  };
+  
+  const fullDateFormatOptions = {
+    timeZone: 'Asia/Manila',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  };
+  
   if (diffDays === 0) {
-    return `Today ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
+    return `Today ${date.toLocaleTimeString('en-US', timeFormatOptions)}`;
   } else if (diffDays === 1) {
-    return `Tomorrow ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
-  } else if (diffDays < 7) {
-    return `${date.toLocaleDateString('en-US', { weekday: 'long' })} ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
+    return `Tomorrow ${date.toLocaleTimeString('en-US', timeFormatOptions)}`;
+  } else if (diffDays < 7 && diffDays > 0) {
+    return date.toLocaleString('en-US', dateTimeFormatOptions);
   } else {
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+    return date.toLocaleString('en-US', fullDateFormatOptions);
   }
 }
 
@@ -550,8 +579,12 @@ async function handleCanvasToken(senderId, token) {
       syncMessage += "📋 Upcoming assignments:\n\n";
       
       // Show first 5 assignments
+      const nowManila = getManilaDate();
       const upcomingAssignments = formattedAssignments
-        .filter(assignment => assignment.dueDate > new Date())
+        .filter(assignment => {
+          const dueDateManila = getManilaDate(assignment.dueDate);
+          return dueDateManila > nowManila;
+        })
         .slice(0, 5);
         
       if (upcomingAssignments.length > 0) {
@@ -646,20 +679,30 @@ async function createTask(senderId, title, timeText) {
   }
 }
 
+// Helper function to get Manila timezone date
+function getManilaDate(date = new Date()) {
+  return new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Manila' }));
+}
+
+// Helper function to check if two dates are the same day in Manila timezone
+function isSameDayManila(date1, date2) {
+  const d1 = getManilaDate(date1);
+  const d2 = getManilaDate(date2);
+  return d1.toDateString() === d2.toDateString();
+}
+
 // Task display functions
 async function sendTasksToday(senderId) {
   const user = getUser(senderId);
   let taskText = "🔥 Tasks due today:\n\n";
   
   if (user && user.assignments && user.assignments.length > 0) {
-    const today = new Date();
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    const todayManila = getManilaDate();
     
     const todayTasks = user.assignments.filter(assignment => {
       if (assignment.dueDate instanceof Date) {
-        // Real Canvas data with Date objects
-        return assignment.dueDate.toDateString() === today.toDateString();
+        // Real Canvas data with Date objects - compare in Manila timezone
+        return isSameDayManila(assignment.dueDate, todayManila);
       } else {
         // Manual tasks with string dates
         return assignment.dueDate.toLowerCase().includes('today') || 
@@ -694,13 +737,14 @@ async function sendTasksWeek(senderId) {
   let taskText = "⏰ Tasks due this week:\n\n";
   
   if (user && user.assignments && user.assignments.length > 0) {
-    const today = new Date();
-    const nextWeek = new Date(today);
-    nextWeek.setDate(nextWeek.getDate() + 7);
+    const todayManila = getManilaDate();
+    const nextWeekManila = getManilaDate();
+    nextWeekManila.setDate(nextWeekManila.getDate() + 7);
     
     const weekTasks = user.assignments.filter(assignment => {
       if (assignment.dueDate instanceof Date) {
-        return assignment.dueDate >= today && assignment.dueDate <= nextWeek;
+        const dueDateManila = getManilaDate(assignment.dueDate);
+        return dueDateManila >= todayManila && dueDateManila <= nextWeekManila;
       } else {
         // For manual tasks, show all for now
         return true;
@@ -738,10 +782,11 @@ async function sendOverdueTasks(senderId) {
   let taskText = "❗️ Overdue tasks:\n\n";
   
   if (user && user.assignments && user.assignments.length > 0) {
-    const now = new Date();
+    const nowManila = getManilaDate();
     const overdueTasks = user.assignments.filter(assignment => {
       if (assignment.dueDate instanceof Date) {
-        return assignment.dueDate < now;
+        const dueDateManila = getManilaDate(assignment.dueDate);
+        return dueDateManila < nowManila;
       } else {
         // For manual tasks, we can't easily determine if they're overdue
         return false;
@@ -774,11 +819,12 @@ async function sendAllUpcoming(senderId) {
   let taskText = "📅 All upcoming assignments:\n\n";
   
   if (user && user.assignments && user.assignments.length > 0) {
-    const now = new Date();
+    const nowManila = getManilaDate();
     const upcomingTasks = user.assignments
       .filter(assignment => {
         if (assignment.dueDate instanceof Date) {
-          return assignment.dueDate >= now;
+          const dueDateManila = getManilaDate(assignment.dueDate);
+          return dueDateManila >= nowManila;
         } else {
           // Include manual tasks
           return true;
