@@ -359,32 +359,250 @@ async function sendTutorialMessage(senderId) {
   await sendMessage(message);
 }
 
-// Handle Canvas token submission
+// Canvas API integration functions
+async function validateCanvasToken(token) {
+  const canvasUrl = process.env.CANVAS_BASE_URL || 'https://dlsu.instructure.com';
+  
+  try {
+    const response = await axios.get(`${canvasUrl}/api/v1/users/self`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000
+    });
+    
+    return {
+      valid: true,
+      user: response.data
+    };
+  } catch (error) {
+    console.error('Canvas token validation failed:', error.response?.status, error.response?.data);
+    return {
+      valid: false,
+      error: error.response?.data?.errors?.[0]?.message || 'Invalid token or network error'
+    };
+  }
+}
+
+async function fetchCanvasAssignments(token) {
+  const canvasUrl = process.env.CANVAS_BASE_URL || 'https://dlsu.instructure.com';
+  
+  try {
+    // Get all courses first
+    const coursesResponse = await axios.get(`${canvasUrl}/api/v1/courses`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      params: {
+        enrollment_state: 'active',
+        per_page: 100
+      },
+      timeout: 15000
+    });
+    
+    const courses = coursesResponse.data;
+    console.log(`Found ${courses.length} active courses`);
+    
+    // Fetch assignments for each course
+    const allAssignments = [];
+    const courseMap = {};
+    
+    for (const course of courses) {
+      courseMap[course.id] = course.name;
+      
+      try {
+        const assignmentsResponse = await axios.get(`${canvasUrl}/api/v1/courses/${course.id}/assignments`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          params: {
+            per_page: 100,
+            order_by: 'due_at'
+          },
+          timeout: 10000
+        });
+        
+        const courseAssignments = assignmentsResponse.data
+          .filter(assignment => assignment.due_at) // Only assignments with due dates
+          .map(assignment => ({
+            id: assignment.id,
+            title: assignment.name,
+            dueDate: new Date(assignment.due_at),
+            course: course.name,
+            courseId: course.id,
+            description: assignment.description,
+            htmlUrl: assignment.html_url,
+            pointsPossible: assignment.points_possible
+          }));
+          
+        allAssignments.push(...courseAssignments);
+        
+      } catch (assignmentError) {
+        console.warn(`Failed to fetch assignments for course ${course.name}:`, assignmentError.message);
+      }
+    }
+    
+    // Sort by due date
+    allAssignments.sort((a, b) => a.dueDate - b.dueDate);
+    
+    console.log(`Fetched ${allAssignments.length} assignments total`);
+    
+    return {
+      assignments: allAssignments,
+      courses: courseMap
+    };
+    
+  } catch (error) {
+    console.error('Failed to fetch Canvas assignments:', error.response?.status, error.response?.data);
+    throw new Error('Failed to sync assignments from Canvas');
+  }
+}
+
+function formatDueDate(date) {
+  const now = new Date();
+  const diffMs = date.getTime() - now.getTime();
+  const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+  
+  if (diffDays === 0) {
+    return `Today ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
+  } else if (diffDays === 1) {
+    return `Tomorrow ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
+  } else if (diffDays < 7) {
+    return `${date.toLocaleDateString('en-US', { weekday: 'long' })} ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
+  } else {
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+  }
+}
+
+// Handle Canvas token submission with real API integration
 async function handleCanvasToken(senderId, token) {
-  // Simulate token validation and mark user as onboarded
-  updateUser(senderId, { 
-    canvasToken: token, 
-    isOnboarded: true,
-    assignments: [
-      { title: "Math Homework", dueDate: "Tomorrow 11:59 PM", course: "Mathematics" },
-      { title: "History Essay", dueDate: "Friday 11:59 PM", course: "History" },
-      { title: "Chemistry Lab Report", dueDate: "Next Monday 8:00 AM", course: "Chemistry" }
-    ]
+  // Send initial loading message
+  await sendMessage({
+    recipient: { id: senderId },
+    message: { text: "🔄 Validating your Canvas token and connecting to DLSU Canvas..." }
   });
   
-  const message = {
-    recipient: { id: senderId },
-    message: {
-      text: "🎉 Great! I'm connecting to your Canvas account...\n\nToken validated successfully! I'm now syncing your assignments and courses. This may take a moment...\n\n✅ Sync complete! Here are your upcoming assignments:\n\n📝 Math Homework - Due Tomorrow 11:59 PM\n📊 History Essay - Due Friday 11:59 PM\n🧪 Chemistry Lab Report - Due Next Monday 8:00 AM\n\nI'll send you reminders 24 hours before each deadline. Want to upgrade to Premium for more frequent reminders and additional features?"
+  try {
+    // Validate the token first
+    const validation = await validateCanvasToken(token);
+    
+    if (!validation.valid) {
+      await sendMessage({
+        recipient: { id: senderId },
+        message: {
+          text: `❌ Canvas token validation failed: ${validation.error}\n\nPlease check your token and try again. Make sure you've enabled the correct permissions:\n\n- Read assignments\n- Read courses\n- Read user data\n\nClick '❓ Show me how' to see the setup tutorial again.`,
+          quick_replies: [
+            {
+              content_type: "text",
+              title: "❓ Show me how",
+              payload: "SHOW_TUTORIAL"
+            },
+            {
+              content_type: "text",
+              title: "🔄 Try Again",
+              payload: "HAVE_TOKEN"
+            }
+          ]
+        }
+      });
+      return;
     }
-  };
-  
-  await sendMessage(message);
-  
-  // After a moment, show the main menu
-  setTimeout(async () => {
-    await sendWelcomeMessage(senderId);
-  }, 2000);
+    
+    // Token is valid, now fetch assignments
+    await sendMessage({
+      recipient: { id: senderId },
+      message: { text: `✅ Connected as ${validation.user.name}!\n\n🔄 Syncing your assignments and courses from DLSU Canvas...` }
+    });
+    
+    const canvasData = await fetchCanvasAssignments(token);
+    
+    // Format assignments for storage
+    const formattedAssignments = canvasData.assignments.map(assignment => ({
+      id: assignment.id,
+      title: assignment.title,
+      dueDate: assignment.dueDate,
+      dueDateFormatted: formatDueDate(assignment.dueDate),
+      course: assignment.course,
+      courseId: assignment.courseId,
+      description: assignment.description,
+      htmlUrl: assignment.htmlUrl,
+      pointsPossible: assignment.pointsPossible,
+      source: 'canvas'
+    }));
+    
+    // Update user with real data
+    updateUser(senderId, {
+      canvasToken: token,
+      isOnboarded: true,
+      canvasUser: validation.user,
+      assignments: formattedAssignments,
+      courses: canvasData.courses,
+      lastSync: new Date().toISOString()
+    });
+    
+    // Send success message with actual assignments
+    let syncMessage = `🎉 Sync complete! Found ${formattedAssignments.length} assignments from ${Object.keys(canvasData.courses).length} courses.\n\n`;
+    
+    if (formattedAssignments.length > 0) {
+      syncMessage += "📋 Upcoming assignments:\n\n";
+      
+      // Show first 5 assignments
+      const upcomingAssignments = formattedAssignments
+        .filter(assignment => assignment.dueDate > new Date())
+        .slice(0, 5);
+        
+      if (upcomingAssignments.length > 0) {
+        upcomingAssignments.forEach(assignment => {
+          syncMessage += `📝 ${assignment.title}\n📚 ${assignment.course}\n⏰ Due: ${assignment.dueDateFormatted}\n\n`;
+        });
+        
+        if (formattedAssignments.length > 5) {
+          syncMessage += `... and ${formattedAssignments.length - 5} more assignments!\n\n`;
+        }
+      } else {
+        syncMessage += "🎉 No upcoming assignments found!\n\n";
+      }
+    } else {
+      syncMessage += "No assignments with due dates found.\n\n";
+    }
+    
+    syncMessage += "I'll send you reminders 24 hours before each deadline. Want to upgrade to Premium for more frequent reminders?";
+    
+    await sendMessage({
+      recipient: { id: senderId },
+      message: { text: syncMessage }
+    });
+    
+    // After a moment, show the main menu
+    setTimeout(async () => {
+      await sendWelcomeMessage(senderId);
+    }, 3000);
+    
+  } catch (error) {
+    console.error('Canvas integration error:', error);
+    
+    await sendMessage({
+      recipient: { id: senderId },
+      message: {
+        text: `❌ Sorry, I couldn't sync your Canvas data: ${error.message}\n\nThis might be due to:\n- Network connectivity issues\n- Canvas server being temporarily unavailable\n- Insufficient token permissions\n\nPlease try again in a few minutes.`,
+        quick_replies: [
+          {
+            content_type: "text",
+            title: "🔄 Try Again",
+            payload: "HAVE_TOKEN"
+          },
+          {
+            content_type: "text",
+            title: "❓ Show Tutorial",
+            payload: "SHOW_TUTORIAL"
+          }
+        ]
+      }
+    });
+  }
 }
 
 // Task management functions
@@ -433,24 +651,35 @@ async function sendTasksToday(senderId) {
   const user = getUser(senderId);
   let taskText = "🔥 Tasks due today:\n\n";
   
-  if (user && user.assignments.length > 0) {
-    const todayTasks = user.assignments.filter(task => 
-      task.dueDate.toLowerCase().includes('today') || 
-      task.dueDate.toLowerCase().includes('tomorrow')
-    );
+  if (user && user.assignments && user.assignments.length > 0) {
+    const today = new Date();
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    const todayTasks = user.assignments.filter(assignment => {
+      if (assignment.dueDate instanceof Date) {
+        // Real Canvas data with Date objects
+        return assignment.dueDate.toDateString() === today.toDateString();
+      } else {
+        // Manual tasks with string dates
+        return assignment.dueDate.toLowerCase().includes('today') || 
+               assignment.dueDate.toLowerCase().includes('tomorrow');
+      }
+    });
     
     if (todayTasks.length > 0) {
-      todayTasks.forEach(task => {
-        taskText += `📝 ${task.title} - Due ${task.dueDate}\n`;
+      todayTasks.forEach(assignment => {
+        const dueText = assignment.dueDateFormatted || assignment.dueDate;
+        taskText += `📝 ${assignment.title}\n📚 ${assignment.course}\n⏰ Due: ${dueText}\n\n`;
       });
     } else {
       taskText += "No tasks due today! 🎉";
     }
   } else {
-    taskText += "No tasks found. Add your Canvas token to sync assignments!";
+    taskText += "No assignments found. Add your Canvas token to sync assignments!";
   }
   
-  taskText += "\n\nYou're doing great! Keep it up! 💪";
+  taskText += "You're doing great! Keep it up! 💪";
   
   const message = {
     recipient: { id: senderId },
@@ -464,15 +693,37 @@ async function sendTasksWeek(senderId) {
   const user = getUser(senderId);
   let taskText = "⏰ Tasks due this week:\n\n";
   
-  if (user && user.assignments.length > 0) {
-    user.assignments.forEach(task => {
-      taskText += `📝 ${task.title} - Due ${task.dueDate}\n`;
-    });
+  if (user && user.assignments && user.assignments.length > 0) {
+    const today = new Date();
+    const nextWeek = new Date(today);
+    nextWeek.setDate(nextWeek.getDate() + 7);
+    
+    const weekTasks = user.assignments.filter(assignment => {
+      if (assignment.dueDate instanceof Date) {
+        return assignment.dueDate >= today && assignment.dueDate <= nextWeek;
+      } else {
+        // For manual tasks, show all for now
+        return true;
+      }
+    }).slice(0, 10); // Limit to 10 assignments
+    
+    if (weekTasks.length > 0) {
+      weekTasks.forEach(assignment => {
+        const dueText = assignment.dueDateFormatted || assignment.dueDate;
+        taskText += `📝 ${assignment.title}\n📚 ${assignment.course}\n⏰ Due: ${dueText}\n\n`;
+      });
+      
+      if (user.assignments.length > 10) {
+        taskText += `... and ${user.assignments.length - 10} more assignments!\n\n`;
+      }
+    } else {
+      taskText += "No assignments due this week! 🎉";
+    }
   } else {
-    taskText += "No tasks found. Add your Canvas token to sync assignments!";
+    taskText += "No assignments found. Add your Canvas token to sync assignments!";
   }
   
-  taskText += "\n\nStay organized! You've got this! 📚";
+  taskText += "Stay organized! You've got this! 📚";
   
   const message = {
     recipient: { id: senderId },
@@ -483,22 +734,79 @@ async function sendTasksWeek(senderId) {
 }
 
 async function sendOverdueTasks(senderId) {
+  const user = getUser(senderId);
+  let taskText = "❗️ Overdue tasks:\n\n";
+  
+  if (user && user.assignments && user.assignments.length > 0) {
+    const now = new Date();
+    const overdueTasks = user.assignments.filter(assignment => {
+      if (assignment.dueDate instanceof Date) {
+        return assignment.dueDate < now;
+      } else {
+        // For manual tasks, we can't easily determine if they're overdue
+        return false;
+      }
+    });
+    
+    if (overdueTasks.length > 0) {
+      overdueTasks.forEach(assignment => {
+        const dueText = assignment.dueDateFormatted || assignment.dueDate;
+        taskText += `📝 ${assignment.title}\n📚 ${assignment.course}\n⏰ Was due: ${dueText}\n\n`;
+      });
+      taskText += "Don't worry! You can still submit these. Contact your instructors if needed.";
+    } else {
+      taskText += "No overdue tasks! 🎉\n\nYou're staying on top of everything. Great job!";
+    }
+  } else {
+    taskText += "No assignments found. Add your Canvas token to sync assignments!";
+  }
+  
   const message = {
     recipient: { id: senderId },
-    message: {
-      text: "❗️ Overdue tasks:\n\nNo overdue tasks! 🎉\n\nYou're staying on top of everything. Great job!"
-    }
+    message: { text: taskText }
   };
   
   await sendMessage(message);
 }
 
 async function sendAllUpcoming(senderId) {
+  const user = getUser(senderId);
+  let taskText = "📅 All upcoming assignments:\n\n";
+  
+  if (user && user.assignments && user.assignments.length > 0) {
+    const now = new Date();
+    const upcomingTasks = user.assignments
+      .filter(assignment => {
+        if (assignment.dueDate instanceof Date) {
+          return assignment.dueDate >= now;
+        } else {
+          // Include manual tasks
+          return true;
+        }
+      })
+      .slice(0, 15); // Limit to 15 assignments
+    
+    if (upcomingTasks.length > 0) {
+      upcomingTasks.forEach((assignment, index) => {
+        const dueText = assignment.dueDateFormatted || assignment.dueDate;
+        taskText += `${index + 1}. 📝 ${assignment.title}\n   📚 ${assignment.course}\n   ⏰ Due: ${dueText}\n\n`;
+      });
+      
+      if (user.assignments.length > 15) {
+        taskText += `... and ${user.assignments.length - 15} more assignments!\n\n`;
+      }
+    } else {
+      taskText += "No upcoming assignments! 🎉\n\n";
+    }
+  } else {
+    taskText += "No assignments found. Add your Canvas token to sync assignments!\n\n";
+  }
+  
+  taskText += "Stay focused and tackle them one by one! 💼";
+  
   const message = {
     recipient: { id: senderId },
-    message: {
-      text: "🗓 All upcoming tasks:\n\n📝 Math Homework - Due today 11:59 PM\n📊 History Essay - Due Friday 11:59 PM\n🧪 Chemistry Lab Report - Due Next Monday 8:00 AM\n🔬 Physics Quiz - Due Next Wednesday 2:00 PM\n\nStay focused and tackle them one by one! 💼"
-    }
+    message: { text: taskText }
   };
   
   await sendMessage(message);
