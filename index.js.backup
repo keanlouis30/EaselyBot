@@ -13,13 +13,9 @@ const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const APP_SECRET = process.env.APP_SECRET;
 const ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN; // For admin dashboard authentication
 
-// Database integration
-const db = require('./services/database');
-
-// Clean up expired sessions periodically (every hour)
-setInterval(async () => {
-  await db.cleanupExpiredSessions();
-}, 60 * 60 * 1000);
+// In-memory storage (resets on deployment)
+const users = new Map(); // senderId -> user data
+const userSessions = new Map(); // senderId -> current session state
 
 // Middleware
 app.use(bodyParser.json({ verify: verifyRequestSignature }));
@@ -96,7 +92,7 @@ app.get('/webhook', (req, res) => {
 });
 
 // Main webhook endpoint for receiving messages
-app.post('/webhook', async (req, res) => {
+app.post('/webhook', (req, res) => {
   const body = req.body;
 
   if (body.object === 'page') {
@@ -107,9 +103,9 @@ app.post('/webhook', async (req, res) => {
       const senderId = webhookEvent.sender.id;
       
       if (webhookEvent.message) {
-        await handleMessage(senderId, webhookEvent.message);
+        handleMessage(senderId, webhookEvent.message);
       } else if (webhookEvent.postback) {
-        await handlePostback(senderId, webhookEvent.postback);
+        handlePostback(senderId, webhookEvent.postback);
       }
     });
 
@@ -138,59 +134,64 @@ app.post('/admin/broadcast', express.json(), requireAdminAuth, async (req, res) 
       console.error('Broadcast failed:', error);
     });
   
-  // Get user count from database for response
-  const allUsers = await db.getAllUsers('all');
-  
   res.json({ 
     success: true, 
     message: 'Broadcast initiated',
-    totalUsers: allUsers.length,
+    totalUsers: users.size,
     testMode 
   });
 });
 
 // Admin endpoint to get user statistics
-app.get('/admin/stats', requireAdminAuth, async (req, res) => {
-  try {
-    const allUsers = await db.getAllUsers('all');
-    const stats = {
-      totalUsers: allUsers.length,
-      onboardedUsers: allUsers.filter(u => u.is_onboarded).length,
-      premiumUsers: allUsers.filter(u => u.subscription_tier === 'premium').length,
-      usersWithCanvas: allUsers.filter(u => u.canvas_token).length,
-      timestamp: new Date().toISOString()
-    };
-    
-    res.json(stats);
-  } catch (error) {
-    console.error('Error fetching stats:', error);
-    res.status(500).json({ error: 'Failed to fetch statistics' });
-  }
+app.get('/admin/stats', requireAdminAuth, (req, res) => {
+  const stats = {
+    totalUsers: users.size,
+    onboardedUsers: Array.from(users.values()).filter(u => u.isOnboarded).length,
+    premiumUsers: Array.from(users.values()).filter(u => u.subscriptionTier === 'premium').length,
+    usersWithCanvas: Array.from(users.values()).filter(u => u.canvasToken).length,
+    timestamp: new Date().toISOString()
+  };
+  
+  res.json(stats);
 });
 
-// User management functions (now using database)
-async function getUser(senderId) {
-  return await db.getUser(senderId);
+// User management functions
+function getUser(senderId) {
+  return users.get(senderId) || null;
 }
 
-async function createUser(senderId) {
-  return await db.createUser(senderId);
+function createUser(senderId) {
+  const userData = {
+    senderId: senderId,
+    isOnboarded: false,
+    canvasToken: null,
+    subscriptionTier: 'free',
+    createdAt: new Date().toISOString(),
+    assignments: []
+  };
+  users.set(senderId, userData);
+  return userData;
 }
 
-async function updateUser(senderId, updates) {
-  return await db.updateUser(senderId, updates);
+function updateUser(senderId, updates) {
+  const user = users.get(senderId);
+  if (user) {
+    Object.assign(user, updates);
+    users.set(senderId, user);
+  }
+  return user;
 }
 
-async function getUserSession(senderId) {
-  return await db.getUserSession(senderId);
+function getUserSession(senderId) {
+  return userSessions.get(senderId) || null;
 }
 
-async function setUserSession(senderId, sessionData) {
-  return await db.setUserSession(senderId, sessionData);
+function setUserSession(senderId, sessionData) {
+  userSessions.set(senderId, sessionData);
 }
 
-async function clearUserSession(senderId) {
-  return await db.clearUserSession(senderId);
+function clearUserSession(senderId) {
+  userSessions.delete(senderId);
 }
 
 // Handle incoming messages
@@ -198,9 +199,9 @@ async function handleMessage(senderId, message) {
   console.log(`Message from ${senderId}:`, message.text);
   
   // Get or create user
-  let user = await getUser(senderId);
+  let user = getUser(senderId);
   if (!user) {
-    user = await createUser(senderId);
+    user = createUser(senderId);
     console.log(`New user created: ${senderId}`);
   }
   
@@ -212,7 +213,7 @@ async function handleMessage(senderId, message) {
     }
 
     const userMessage = (message.text || '').toLowerCase().trim();
-    const session = await getUserSession(senderId);
+    const session = getUserSession(senderId);
     
     // Handle session-based flows first
     if (session && session.flow) {
@@ -225,14 +226,14 @@ async function handleMessage(senderId, message) {
       case 'get started':
       case 'hi':
       case 'hello':
-        if (!user.is_onboarded) {
+        if (!user.isOnboarded) {
           await startOnboardingFlow(senderId);
         } else {
           await sendWelcomeMessage(senderId);
         }
         break;
       case 'menu':
-        if (user.is_onboarded) {
+        if (user.isOnboarded) {
           await sendWelcomeMessage(senderId);
         } else {
           await startOnboardingFlow(senderId);
@@ -240,7 +241,7 @@ async function handleMessage(senderId, message) {
         break;
       case 'activate':
         await sendActivationMessage(senderId);
-        await updateUser(senderId, { subscription_tier: 'premium' });
+        updateUser(senderId, { subscriptionTier: 'premium' });
         break;
       case 'test planner':
       case 'test dashboard':
@@ -261,21 +262,21 @@ async function handleMessage(senderId, message) {
 
 // Handle session-based conversation flows
 async function handleSessionFlow(senderId, messageText, session) {
-  const user = await getUser(senderId);
+  const user = getUser(senderId);
   
   switch (session.flow) {
     case 'add_task':
       if (session.step === 'title') {
         // Store task title, then ask for course
-        await setUserSession(senderId, { flow: 'add_task', step: 'course', taskTitle: messageText });
+        setUserSession(senderId, { flow: 'add_task', step: 'course', taskTitle: messageText });
         await sendCourseSelection(senderId);
       } else if (session.step === 'course_other') {
         // User provided a custom course name
-        await setUserSession(senderId, { ...session, step: 'description', courseName: messageText, courseId: null });
+        setUserSession(senderId, { ...session, step: 'description', courseName: messageText, courseId: null });
         await sendDescriptionRequest(senderId);
       } else if (session.step === 'description') {
         // Store description then ask for due date
-        await setUserSession(senderId, { ...session, step: 'date', description: messageText });
+        setUserSession(senderId, { ...session, step: 'date', description: messageText });
         await sendTaskDateRequest(senderId);
       } else if (session.step === 'date') {
         // Only accept quick replies for date selection
@@ -296,7 +297,7 @@ async function handleSessionFlow(senderId, messageText, session) {
       }
       break;
     default:
-      await clearUserSession(senderId);
+      clearUserSession(senderId);
       await sendGenericResponse(senderId);
   }
 }
@@ -306,21 +307,21 @@ async function handleQuickReply(senderId, payload) {
   // Dynamic payloads first
   if (payload.startsWith('SELECT_COURSE_')) {
     const courseToken = payload.replace('SELECT_COURSE_', '');
-    const session = await getUserSession(senderId) || {};
+    const session = getUserSession(senderId) || {};
     if (session.flow === 'add_task' && session.step === 'course') {
       if (courseToken === 'PERSONAL') {
-        await setUserSession(senderId, { ...session, step: 'description', courseId: null, courseName: 'Personal' });
+        setUserSession(senderId, { ...session, step: 'description', courseId: null, courseName: 'Personal' });
         await sendDescriptionRequest(senderId);
         return;
       }
       if (courseToken === 'OTHER') {
-        await setUserSession(senderId, { ...session, step: 'course_other' });
+        setUserSession(senderId, { ...session, step: 'course_other' });
         await sendAskCustomCourseName(senderId);
         return;
       }
       // courseToken is numeric id
       const courseId = parseInt(courseToken, 10);
-      await setUserSession(senderId, { ...session, step: 'description', courseId, courseName: 'Selected Course' });
+      setUserSession(senderId, { ...session, step: 'description', courseId, courseName: 'Selected Course' });
       await sendDescriptionRequest(senderId);
       return;
     }
@@ -340,11 +341,11 @@ async function handleQuickReply(senderId, payload) {
       await sendTermsOfUseLink(senderId);
       break;
     case 'AGREE_PRIVACY':
-      await updateUser(senderId, { agreed_privacy: true });
+      updateUser(senderId, { agreedPrivacy: true });
       await maybeFinishConsent(senderId);
       break;
     case 'AGREE_TERMS_OF_USE':
-      await updateUser(senderId, { agreed_terms: true });
+      updateUser(senderId, { agreedTerms: true });
       await maybeFinishConsent(senderId);
       break;
     case 'SHOW_VIDEO_TUTORIAL':
@@ -372,7 +373,7 @@ async function handleQuickReply(senderId, payload) {
       await sendAllUpcoming(senderId);
       break;
     case 'ADD_NEW_TASK':
-      await setUserSession(senderId, { flow: 'add_task', step: 'title' });
+      setUserSession(senderId, { flow: 'add_task', step: 'title' });
       await sendAddTaskFlow(senderId);
       break;
     // New menu item handlers
@@ -445,9 +446,9 @@ async function handlePostback(senderId, postback) {
   console.log(`Postback from ${senderId}:`, postback.payload);
   
   const payload = postback.payload;
-  let user = await getUser(senderId);
+  let user = getUser(senderId);
   if (!user) {
-    user = await createUser(senderId);
+    user = createUser(senderId);
   }
   
   switch (payload) {
@@ -483,7 +484,7 @@ async function handlePostback(senderId, postback) {
       await sendAllUpcoming(senderId);
       break;
     case 'ADD_NEW_TASK':
-      await setUserSession(senderId, { flow: 'add_task', step: 'title' });
+      setUserSession(senderId, { flow: 'add_task', step: 'title' });
       await sendAddTaskFlow(senderId);
       break;
     // New menu item handlers for postbacks
@@ -506,8 +507,8 @@ async function handlePostback(senderId, postback) {
 
 // Welcome message (simplified now that we have persistent menu)
 async function sendWelcomeMessage(senderId) {
-  const user = await getUser(senderId);
-  const userName = user?.canvas_user_name ? `, ${user.canvas_user_name.split(' ')[0]}` : '';
+  const user = getUser(senderId);
+  const userName = user?.canvasUser?.name ? `, ${user.canvasUser.name.split(' ')[0]}` : '';
   
   const message = {
     recipient: { id: senderId },
@@ -549,7 +550,7 @@ async function sendWelcomeMessage(senderId) {
 // Start multi-step onboarding flow
 async function startOnboardingFlow(senderId) {
   // Reset consent flags
-  await updateUser(senderId, { agreed_privacy: false, agreed_terms: false });
+  updateUser(senderId, { agreedPrivacy: false, agreedTerms: false });
 
   await sendIntroMessage(senderId);
   await sendFreeFeaturesMessage(senderId);
@@ -692,9 +693,9 @@ async function sendTermsOfUseLink(senderId) {
 }
 
 async function maybeFinishConsent(senderId) {
-  const user = await getUser(senderId);
-  const agreedPrivacy = !!user?.agreed_privacy;
-  const agreedTerms = !!user?.agreed_terms;
+  const user = getUser(senderId);
+  const agreedPrivacy = !!user?.agreedPrivacy;
+  const agreedTerms = !!user?.agreedTerms;
 
   if (agreedPrivacy && !agreedTerms) {
     // Privacy agreed, now show Terms of Use introduction
@@ -2413,13 +2414,24 @@ async function handleTaskTimeQuickReply(senderId, hour, minute) {
     courseName: session.courseName || 'Personal'
   });
   
-  // If task was successfully created in Canvas, also store it in database
+  // If task was successfully created in Canvas, also store it locally
   if (createdTask) {
-    await db.createTask(senderId, createdTask);
-    console.log(`Task '${createdTask.title}' stored in database for user ${senderId}`);
+    const user = getUser(senderId);
+    if (user) {
+      // Initialize assignments array if it doesn't exist
+      if (!user.assignments) {
+        user.assignments = [];
+      }
+      
+      // Add the created task to user's assignments
+      user.assignments.push(createdTask);
+      updateUser(senderId, { assignments: user.assignments });
+      
+      console.log(`Task '${createdTask.title}' stored locally for user ${senderId}`);
+    }
   }
   
-  await clearUserSession(senderId);
+  clearUserSession(senderId);
   
   // Show updated task list after a moment
   setTimeout(async () => {
@@ -2462,17 +2474,19 @@ async function broadcastMessage(message, targetUsers = 'all', testMode = false) 
     errors: []
   };
   
-  // Get target user list from database
+  // Get target user list
   let targetUserIds = [];
   
   if (targetUsers === 'all') {
     // Send to all onboarded users
-    const users = await db.getAllUsers('onboarded');
-    targetUserIds = users.map(user => user.sender_id);
+    targetUserIds = Array.from(users.entries())
+      .filter(([id, user]) => user.isOnboarded)
+      .map(([id, user]) => id);
   } else if (targetUsers === 'premium') {
     // Send to premium users only
-    const users = await db.getAllUsers('premium');
-    targetUserIds = users.map(user => user.sender_id);
+    targetUserIds = Array.from(users.entries())
+      .filter(([id, user]) => user.subscriptionTier === 'premium')
+      .map(([id, user]) => id);
   } else if (Array.isArray(targetUsers)) {
     // Send to specific user IDs
     targetUserIds = targetUsers;
