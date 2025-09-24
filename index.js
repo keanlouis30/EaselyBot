@@ -83,9 +83,16 @@ app.get('/debug/menu', async (req, res) => {
       `https://graph.facebook.com/v18.0/me/messenger_profile?fields=persistent_menu,get_started,greeting&access_token=${PAGE_ACCESS_TOKEN}`
     );
     
+    const hasMenu = profileResponse.data?.data?.[0]?.persistent_menu?.length > 0;
+    const hasGetStarted = profileResponse.data?.data?.[0]?.get_started?.payload === 'GET_STARTED';
+    
     res.json({
       status: 'success',
       messenger_profile: profileResponse.data,
+      configured: {
+        menu: hasMenu,
+        get_started: hasGetStarted
+      },
       note: 'If menu is missing on Android, try these steps:',
       android_fixes: [
         '1. Force close and reopen Messenger app',
@@ -93,31 +100,99 @@ app.get('/debug/menu', async (req, res) => {
         '3. Update Messenger to latest version',
         '4. Switch to a different conversation and back',
         '5. Wait 5-10 minutes for Facebook to propagate changes',
-        '6. Try accessing via m.facebook.com in Chrome on Android'
+        '6. Try accessing via m.facebook.com in Chrome on Android',
+        '7. Use /debug/refresh-menu endpoint to force refresh'
       ]
     });
   } catch (error) {
-    res.status(500).json({
-      status: 'error',
-      message: error.message,
-      details: error.response?.data
-    });
+    if (error.response?.data?.error?.code === 613) {
+      res.status(429).json({
+        status: 'rate_limited',
+        message: 'Facebook API rate limit exceeded. Menu might still be configured.',
+        suggestion: 'Wait a few minutes and try again, or use POST /debug/refresh-menu?retry=true',
+        error_details: error.response?.data
+      });
+    } else {
+      res.status(500).json({
+        status: 'error',
+        message: error.message,
+        details: error.response?.data
+      });
+    }
   }
 });
 
-// Endpoint to force refresh the menu
+// Endpoint to force refresh the menu with retry logic
 app.post('/debug/refresh-menu', async (req, res) => {
+  const useRetry = req.query.retry === 'true';
+  const forceSetup = req.query.force === 'true';
+  
   try {
-    await setupPersistentMenu();
+    console.log(`Menu refresh requested (retry: ${useRetry}, force: ${forceSetup})`);
+    
+    // Check current status first (unless forcing)
+    let currentStatus = { hasMenu: false, hasGetStarted: false };
+    if (!forceSetup) {
+      currentStatus = await verifyMenuConfiguration();
+    }
+    
+    const results = {
+      before: currentStatus,
+      actions: [],
+      success: true
+    };
+    
+    // Setup Get Started button if needed or forced
+    if (forceSetup || !currentStatus.hasGetStarted) {
+      try {
+        await setupGetStartedButton();
+        results.actions.push('✓ Get Started button configured');
+        if (useRetry) await delay(1500); // Longer delay when retrying
+      } catch (error) {
+        results.actions.push(`✗ Get Started button: ${error.message}`);
+        if (error.response?.data?.error?.code !== 613) {
+          results.success = false;
+        }
+      }
+    }
+    
+    // Setup menu if needed or forced
+    if (forceSetup || !currentStatus.hasMenu) {
+      try {
+        await setupPersistentMenu();
+        results.actions.push('✓ Persistent menu configured');
+      } catch (error) {
+        results.actions.push(`✗ Persistent menu: ${error.message}`);
+        if (error.response?.data?.error?.code !== 613) {
+          results.success = false;
+        }
+      }
+    }
+    
+    if (results.actions.length === 0) {
+      results.actions.push('Menu already configured, no action needed');
+    }
+    
     res.json({
-      status: 'success',
-      message: 'Menu refresh initiated. Please wait 5-10 minutes for changes to propagate.'
+      status: results.success ? 'success' : 'partial_success',
+      message: 'Menu refresh completed. Changes may take 5-10 minutes to appear.',
+      results,
+      android_note: 'Android users may need to clear Messenger cache for menu to appear'
     });
   } catch (error) {
-    res.status(500).json({
-      status: 'error',
-      message: error.message
-    });
+    if (error.response?.data?.error?.code === 613 && !useRetry) {
+      res.status(429).json({
+        status: 'rate_limited',
+        message: 'Rate limit exceeded. Try again with ?retry=true to use exponential backoff',
+        error: error.response?.data
+      });
+    } else {
+      res.status(500).json({
+        status: 'error',
+        message: error.message,
+        details: error.response?.data
+      });
+    }
   }
 });
 
@@ -3091,27 +3166,85 @@ async function setupPersistentMenu() {
   };
 
   try {
-    const response = await axios.post(
-      `https://graph.facebook.com/v18.0/me/messenger_profile?access_token=${PAGE_ACCESS_TOKEN}`,
-      menuData,
-      {
-        headers: {
-          'Content-Type': 'application/json'
+    await callWithRetry(async () => {
+      const response = await axios.post(
+        `https://graph.facebook.com/v18.0/me/messenger_profile?access_token=${PAGE_ACCESS_TOKEN}`,
+        menuData,
+        {
+          headers: {
+            'Content-Type': 'application/json'
+          }
         }
-      }
-    );
-    console.log('Persistent menu configured successfully:', response.data);
+      );
+      console.log('Persistent menu configured successfully:', response.data);
+      return response;
+    });
     
-    // Skip verification to avoid additional API calls
-    console.log('Menu setup completed (verification skipped to avoid rate limits)');
+    console.log('Menu setup completed successfully');
     
   } catch (error) {
     if (error.response?.data?.error?.code === 613) {
-      console.warn('Rate limit hit while setting persistent menu. This is normal during frequent deployments.');
+      console.warn('Rate limit persists for menu after retries.');
       console.warn('The menu should already be configured from a previous deployment.');
     } else {
       console.error('Failed to set persistent menu:', error.response?.data || error.message);
     }
+  }
+}
+
+// Helper function to delay execution
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Function to make API calls with exponential backoff for rate limiting
+async function callWithRetry(apiCall, maxRetries = 3, initialDelay = 1000) {
+  let lastError;
+  
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await apiCall();
+    } catch (error) {
+      lastError = error;
+      
+      // Check if it's a rate limit error
+      if (error.response?.data?.error?.code === 613) {
+        const waitTime = initialDelay * Math.pow(2, i); // Exponential backoff
+        console.log(`Rate limit hit. Waiting ${waitTime}ms before retry ${i + 1}/${maxRetries}...`);
+        await delay(waitTime);
+      } else {
+        // If it's not a rate limit error, throw immediately
+        throw error;
+      }
+    }
+  }
+  
+  throw lastError;
+}
+
+// Function to verify current menu configuration
+async function verifyMenuConfiguration() {
+  try {
+    const response = await axios.get(
+      `https://graph.facebook.com/v18.0/me/messenger_profile?fields=persistent_menu,get_started&access_token=${PAGE_ACCESS_TOKEN}`
+    );
+    
+    const hasMenu = response.data?.data?.[0]?.persistent_menu?.length > 0;
+    const hasGetStarted = response.data?.data?.[0]?.get_started?.payload === 'GET_STARTED';
+    
+    return {
+      hasMenu,
+      hasGetStarted,
+      menuData: response.data?.data?.[0]?.persistent_menu,
+      getStartedData: response.data?.data?.[0]?.get_started
+    };
+  } catch (error) {
+    if (error.response?.data?.error?.code === 613) {
+      console.warn('Rate limit hit while verifying menu. Assuming menu is configured.');
+      return { hasMenu: true, hasGetStarted: true };
+    }
+    console.error('Error verifying menu configuration:', error.response?.data || error.message);
+    return { hasMenu: false, hasGetStarted: false };
   }
 }
 
@@ -3124,19 +3257,22 @@ async function setupGetStartedButton() {
   };
 
   try {
-    const response = await axios.post(
-      `https://graph.facebook.com/v18.0/me/messenger_profile?access_token=${PAGE_ACCESS_TOKEN}`,
-      buttonData,
-      {
-        headers: {
-          'Content-Type': 'application/json'
+    await callWithRetry(async () => {
+      const response = await axios.post(
+        `https://graph.facebook.com/v18.0/me/messenger_profile?access_token=${PAGE_ACCESS_TOKEN}`,
+        buttonData,
+        {
+          headers: {
+            'Content-Type': 'application/json'
+          }
         }
-      }
-    );
-    console.log('Get Started button configured successfully');
+      );
+      console.log('Get Started button configured successfully');
+      return response;
+    });
   } catch (error) {
     if (error.response?.data?.error?.code === 613) {
-      console.warn('Rate limit hit while setting Get Started button. This is normal during frequent deployments.');
+      console.warn('Rate limit persists for Get Started button after retries.');
       console.warn('The button should already be configured from a previous deployment.');
     } else {
       console.error('Failed to set Get Started button:', error.response?.data || error.message);
@@ -3160,18 +3296,35 @@ app.listen(PORT, async () => {
   } else {
     console.log('All required environment variables are set');
     
-    // Only setup Messenger profile if explicitly requested or in production
+    // Check current menu configuration first
+    console.log('Checking current Messenger profile configuration...');
+    const menuStatus = await verifyMenuConfiguration();
+    
     const shouldSetupProfile = process.env.SETUP_MESSENGER_PROFILE === 'true' || 
                               process.env.NODE_ENV === 'production' ||
-                              process.env.FORCE_MENU_SETUP === 'true';
+                              process.env.FORCE_MENU_SETUP === 'true' ||
+                              !menuStatus.hasMenu || !menuStatus.hasGetStarted;
     
     if (shouldSetupProfile) {
-      console.log('Setting up Messenger profile...');
-      await setupGetStartedButton();
-      await setupPersistentMenu();
+      if (!menuStatus.hasMenu || !menuStatus.hasGetStarted) {
+        console.log('Menu or Get Started button missing. Setting up Messenger profile...');
+      } else {
+        console.log('Forcing Messenger profile setup as requested...');
+      }
+      
+      // Setup with delay between calls to avoid rate limiting
+      if (!menuStatus.hasGetStarted) {
+        await setupGetStartedButton();
+        await delay(1000); // Wait 1 second between API calls
+      }
+      
+      if (!menuStatus.hasMenu) {
+        await setupPersistentMenu();
+      }
     } else {
-      console.log('Skipping Messenger profile setup (set SETUP_MESSENGER_PROFILE=true to force setup)');
-      console.log('Menu should already be configured from previous deployment.');
+      console.log('✓ Messenger profile already configured:');
+      console.log(`  - Get Started button: ${menuStatus.hasGetStarted ? '✓' : '✗'}`);
+      console.log(`  - Persistent menu: ${menuStatus.hasMenu ? '✓' : '✗'}`);
     }
   }
   
