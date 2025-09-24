@@ -1883,7 +1883,7 @@ function formatDateTimeManila(date) {
   });
 }
 
-// Format assignment details in code block style with colors and inline links
+// Format assignment details in clean text format without ANSI colors
 function formatAssignmentMessage(assignment, options = {}) {
   const { showCourseTag = false, isManual = false } = options;
   
@@ -1906,35 +1906,26 @@ function formatAssignmentMessage(assignment, options = {}) {
     assignmentUrl = `${canvasUrl}/courses/${assignment.courseId}/assignments/${assignment.id}`;
   }
   
-  // Format the message with ANSI colors in code block style
-  let message = '```ansi\n';
+  // Format the message in clean text without colors
+  let message = '';
   
-  // Title with color (blue for regular, yellow for manual tasks)
-  const titleColor = isManual ? '\u001b[33m' : '\u001b[36m'; // Yellow for manual, cyan for regular
-  const resetColor = '\u001b[0m';
-  const grayColor = '\u001b[90m';
-  const greenColor = '\u001b[32m';
-  const redColor = '\u001b[31m';
-  
-  message += `${titleColor}📝 ${assignment.title}${isManual ? ' (Manual)' : ''}${resetColor}\n`;
-  message += `${grayColor}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${resetColor}\n`;
+  message += `📝 ${assignment.title}${isManual ? ' (Manual)' : ''}\n`;
+  message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
   
   if (showCourseTag || assignment.course) {
-    message += `${greenColor}📚 Course:${resetColor} [${assignment.course || 'Personal'}]\n`;
+    message += `📚 Course: [${assignment.course || 'Personal'}]\n`;
   }
   
-  message += `${redColor}⏰ Due:${resetColor} ${dueTime}\n`;
+  message += `⏰ Due: ${dueTime}\n`;
   
   if (assignment.pointsPossible) {
-    message += `${greenColor}💯 Points:${resetColor} ${assignment.pointsPossible}\n`;
+    message += `💯 Points: ${assignment.pointsPossible}\n`;
   }
   
-  // Add Canvas link inside the code block if available
+  // Add Canvas link if available
   if (assignmentUrl) {
-    message += `${grayColor}🔗 Link:${resetColor} ${assignmentUrl}\n`;
+    message += `🔗 Link: ${assignmentUrl}\n`;
   }
-  
-  message += '```';
   
   return message;
 }
