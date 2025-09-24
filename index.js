@@ -2129,8 +2129,7 @@ async function sendOverdueTasks(senderId) {
       }));
     
     // Filter out tasks older than 300 days for UI purposes (database might return more)
-    const cutoffDate = getManilaDate();
-    cutoffDate.setDate(cutoffDate.getDate() - 300);
+    // Reuse cutoffDate already declared above
     const filteredOverdueManualTasks = overdueManualTasks.filter(task => {
       const dueDateManila = getManilaDate(task.dueDate);
       return dueDateManila > cutoffDate; // Keep tasks newer than 300 days
