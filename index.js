@@ -175,24 +175,38 @@ app.post('/admin/broadcast', express.json(), requireAdminAuth, async (req, res) 
   
   console.log(`Admin broadcast initiated: ${message.text.substring(0, 50)}...`);
   
-  // Start broadcast in background to avoid timeout
-  broadcastMessage(message, targetUsers, testMode)
-    .then(result => {
-      console.log('Broadcast completed:', result);
-    })
-    .catch(error => {
-      console.error('Broadcast failed:', error);
+  try {
+    // Execute broadcast and wait for completion
+    const result = await broadcastMessage(message, targetUsers, testMode);
+    console.log('Broadcast completed:', result);
+    
+    // Return actual broadcast results
+    res.json({ 
+      success: true, 
+      message: 'Broadcast completed',
+      totalUsers: result.total,
+      stats: {
+        sent: result.successful,
+        failed: result.failed,
+        total: result.total
+      },
+      errors: result.errors,
+      testMode 
     });
-  
-  // Get user count from database for response
-  const allUsers = await db.getAllUsers('all');
-  
-  res.json({ 
-    success: true, 
-    message: 'Broadcast initiated',
-    totalUsers: allUsers.length,
-    testMode 
-  });
+  } catch (error) {
+    console.error('Broadcast failed:', error);
+    
+    // Get user count for error response
+    const allUsers = await db.getAllUsers('all');
+    
+    res.status(500).json({
+      success: false,
+      message: 'Broadcast failed',
+      error: error.message,
+      totalUsers: allUsers.length,
+      testMode
+    });
+  }
 });
 
 // Admin endpoint to get user statistics
