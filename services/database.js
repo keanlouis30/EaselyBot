@@ -2,6 +2,35 @@
 const { createClient } = require('@supabase/supabase-js');
 const CryptoJS = require('crypto-js');
 
+// Helper function to get Manila timezone date parts
+function getManilaDateParts(date = new Date()) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+  
+  const parts = formatter.formatToParts(date);
+  return {
+    year: parseInt(parts.find(p => p.type === 'year').value),
+    month: parseInt(parts.find(p => p.type === 'month').value),
+    day: parseInt(parts.find(p => p.type === 'day').value),
+    hour: parseInt(parts.find(p => p.type === 'hour').value),
+    minute: parseInt(parts.find(p => p.type === 'minute').value),
+    second: parseInt(parts.find(p => p.type === 'second').value)
+  };
+}
+
+// Helper function to create Manila timezone Date object
+function createManilaDate({ year, month, day, hour = 0, minute = 0, second = 0 }) {
+  return new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}+08:00`);
+}
+
 // Initialize Supabase client
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -217,27 +246,42 @@ async function getUserTasks(senderId, options = {}) {
     
     // Add filters based on options
     if (options.dueToday) {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
+      const today = getManilaDateParts();
+      const startOfTodayManila = createManilaDate({ year: today.year, month: today.month, day: today.day, hour: 0, minute: 0, second: 0 });
+      const endOfTodayManila = createManilaDate({ year: today.year, month: today.month, day: today.day, hour: 23, minute: 59, second: 59 });
+      
+      console.log(`📅 dueToday filter: Manila date ${today.year}-${today.month}-${today.day}, UTC range: ${startOfTodayManila.toISOString()} to ${endOfTodayManila.toISOString()}`);
       
       query = query
-        .gte('due_date', today.toISOString())
-        .lt('due_date', tomorrow.toISOString());
+        .gte('due_date', startOfTodayManila.toISOString())
+        .lte('due_date', endOfTodayManila.toISOString());
     }
     
     if (options.overdue) {
-      query = query.lt('due_date', new Date().toISOString());
+      const now = getManilaDateParts();
+      const currentManilaTime = createManilaDate(now);
+      
+      console.log(`⏰ overdue filter: Current Manila time: ${currentManilaTime.toISOString()}`);
+      
+      query = query.lt('due_date', currentManilaTime.toISOString());
     }
     
     if (options.upcoming) {
-      const future = new Date();
-      future.setDate(future.getDate() + (options.daysAhead || 7));
+      const daysAhead = options.daysAhead || 7;
+      
+      const now = getManilaDateParts();
+      const currentManilaTime = createManilaDate(now);
+      
+      // Calculate future date in Manila timezone
+      const futureDate = new Date(currentManilaTime.getTime() + (daysAhead * 24 * 60 * 60 * 1000));
+      const futureParts = getManilaDateParts(futureDate);
+      const endOfFutureDayManila = createManilaDate({ ...futureParts, hour: 23, minute: 59, second: 59 });
+      
+      console.log(`📅 upcoming filter: ${daysAhead} days ahead, Manila range: ${currentManilaTime.toISOString()} to ${endOfFutureDayManila.toISOString()}`);
       
       query = query
-        .gte('due_date', new Date().toISOString())
-        .lte('due_date', future.toISOString());
+        .gte('due_date', currentManilaTime.toISOString())
+        .lte('due_date', endOfFutureDayManila.toISOString());
     }
     
     const { data, error } = await query.order('due_date', { ascending: true });
@@ -246,6 +290,13 @@ async function getUserTasks(senderId, options = {}) {
       console.error('Error fetching tasks:', error);
       return [];
     }
+    
+    console.log(`📄 getUserTasks results for user ${user.id}:`, {
+      totalFound: (data || []).length,
+      manualTasks: (data || []).filter(t => t.is_manual).length,
+      options,
+      taskTitles: (data || []).map(t => `"${t.title}" (${new Date(t.due_date).toISOString()})`)
+    });
     
     return data || [];
   } catch (err) {
@@ -272,21 +323,31 @@ async function createTask(senderId, taskData) {
       courseId = course?.id;
     }
     
+    const taskInsertData = {
+      user_id: user.id,
+      course_id: courseId,
+      title: taskData.title,
+      description: taskData.description || '',
+      due_date: taskData.dueDate,
+      due_date_text: taskData.dueDateText,
+      course_name: taskData.courseName || taskData.course || 'Personal',
+      is_manual: true,
+      canvas_type: taskData.canvasType,
+      canvas_id: taskData.canvasId,
+      canvas_course_id: taskData.courseId
+    };
+    
+    console.log(`📝 Creating task for user ${user.id}:`, {
+      title: taskInsertData.title,
+      due_date: taskInsertData.due_date,
+      due_date_iso: taskData.dueDate?.toISOString ? taskData.dueDate.toISOString() : 'not a date object',
+      course: taskInsertData.course_name,
+      is_manual: taskInsertData.is_manual
+    });
+    
     const { data, error } = await supabase
       .from('tasks')
-      .insert({
-        user_id: user.id,
-        course_id: courseId,
-        title: taskData.title,
-        description: taskData.description || '',
-        due_date: taskData.dueDate,
-        due_date_text: taskData.dueDateText,
-        course_name: taskData.courseName || taskData.course || 'Personal',
-        is_manual: true,
-        canvas_type: taskData.canvasType,
-        canvas_id: taskData.canvasId,
-        canvas_course_id: taskData.courseId
-      })
+      .insert(taskInsertData)
       .select()
       .single();
     

@@ -1330,50 +1330,8 @@ async function sendTaskTimeRequest(senderId) {
   await sendMessage(message);
 }
 
-async function createTask(senderId, title, timeInput) {
-  const user = await getUser(senderId);
-  if (user) {
-    // Handle both Date objects and strings
-    let dueDate, dueDateText;
-    
-    if (timeInput instanceof Date) {
-      dueDate = timeInput;
-      dueDateText = formatDueDate(dueDate);
-    } else {
-      // For text input, store as-is and try to create a Date for sorting
-      dueDateText = timeInput;
-      // Try to create a reasonable Date object for sorting purposes
-      const now = getManilaDate();
-      dueDate = new Date(now.getTime() + 24 * 60 * 60 * 1000); // Default to tomorrow
-    }
-    
-    const newTask = {
-      title: title,
-      dueDate: dueDate,
-      dueDateText: dueDateText, // Store the formatted text for display
-      course: "Personal",
-      createdAt: new Date().toISOString(),
-      isManual: true // Flag to distinguish manual tasks
-    };
-    
-    user.assignments.push(newTask);
-    await updateUser(senderId, { assignments: user.assignments });
-    
-    const message = {
-      recipient: { id: senderId },
-      message: {
-        text: `✅ Task created successfully!\n\n📝 "${title}"\n⏰ Due: ${dueDateText}\n\nI've added this to your task list and will include it in your reminders!`
-      }
-    };
-    
-    await sendMessage(message);
-    
-    // Show updated task list after a moment
-    setTimeout(async () => {
-      await sendWelcomeMessage(senderId);
-    }, 1000);
-  }
-}
+// Legacy function - replaced by db.createTask() in database service
+// This function is no longer used since migration to database storage
 
 // Create a Planner Note (To-Do) in Canvas
 async function createCanvasPlannerNote(senderId, { title, description, dueDate, courseId, courseName }) {
@@ -1803,24 +1761,18 @@ function buildManilaDateFromParts({ year, month, day, hour = 17, minute = 0 }) {
 function getTargetWeekdayManila(targetDow, preferNext = false) {
   const now = getManilaDate();
   
-  // Get the day of week in Manila timezone
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Manila',
-    weekday: 'numeric' // Returns 1=Sunday, 2=Monday, etc.
-  });
-  
-  // Convert to standard 0=Sun format
-  const manilaWeekday = new Date().toLocaleDateString('en-US', { 
+  // Get current day of week in Manila timezone (0=Sunday, 1=Monday, etc.)
+  const currentManilaDate = new Date().toLocaleDateString('en-US', { 
     timeZone: 'Asia/Manila',
     weekday: 'long'
   });
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const dow = dayNames.indexOf(manilaWeekday);
+  const currentDow = dayNames.indexOf(currentManilaDate);
   
-  let delta = (targetDow - dow + 7) % 7;
+  let delta = (targetDow - currentDow + 7) % 7;
   if (delta === 0 && preferNext) delta = 7;
   
-  // Add the delta days to get the target date in Manila timezone
+  // Get current Manila date parts
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Manila',
     year: 'numeric',
@@ -1856,7 +1808,7 @@ function formatDateTimeManila(date) {
   });
 }
 
-// Format assignment details in code block style for better readability
+// Format assignment details in code block style with colors and inline links
 function formatAssignmentMessage(assignment, options = {}) {
   const { showCourseTag = false, isManual = false } = options;
   
@@ -1879,27 +1831,35 @@ function formatAssignmentMessage(assignment, options = {}) {
     assignmentUrl = `${canvasUrl}/courses/${assignment.courseId}/assignments/${assignment.id}`;
   }
   
-  // Format the message in a code block style
-  let message = '```\n';
-  message += `📝 ${assignment.title}${isManual ? ' (Manual)' : ''}\n`;
-  message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  // Format the message with ANSI colors in code block style
+  let message = '```ansi\n';
+  
+  // Title with color (blue for regular, yellow for manual tasks)
+  const titleColor = isManual ? '\u001b[33m' : '\u001b[36m'; // Yellow for manual, cyan for regular
+  const resetColor = '\u001b[0m';
+  const grayColor = '\u001b[90m';
+  const greenColor = '\u001b[32m';
+  const redColor = '\u001b[31m';
+  
+  message += `${titleColor}📝 ${assignment.title}${isManual ? ' (Manual)' : ''}${resetColor}\n`;
+  message += `${grayColor}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${resetColor}\n`;
   
   if (showCourseTag || assignment.course) {
-    message += `📚 Course: ${assignment.course || 'Personal'}\n`;
+    message += `${greenColor}📚 Course:${resetColor} [${assignment.course || 'Personal'}]\n`;
   }
   
-  message += `⏰ Due: ${dueTime}\n`;
+  message += `${redColor}⏰ Due:${resetColor} ${dueTime}\n`;
   
   if (assignment.pointsPossible) {
-    message += `💯 Points: ${assignment.pointsPossible}\n`;
+    message += `${greenColor}💯 Points:${resetColor} ${assignment.pointsPossible}\n`;
   }
   
-  message += '```\n';
-  
-  // Add link after code block if available
+  // Add Canvas link inside the code block if available
   if (assignmentUrl) {
-    message += `\n🔗 [Open in Canvas](${assignmentUrl})`;
+    message += `${grayColor}🔗 Link:${resetColor} ${assignmentUrl}\n`;
   }
+  
+  message += '```';
   
   return message;
 }
@@ -1932,11 +1892,20 @@ async function sendTasksToday(senderId) {
       return isSameDayManila(assignment.dueDate, todayManila);
     });
     
-    // Also get manual tasks due today
-    const todayManualTasks = (user.assignments || []).filter(task => {
-      if (!task.isManual || !task.dueDate) return false;
-      return isSameDayManila(task.dueDate, todayManila);
-    });
+    // Get manual tasks from database due today (database query now handles Manila timezone)
+    const databaseTasks = await db.getUserTasks(senderId, { dueToday: true });
+    const todayManualTasks = databaseTasks
+      .filter(task => task.is_manual && task.due_date) // Only filter for manual tasks with due dates
+      .map(dbTask => ({
+        id: dbTask.canvas_id || dbTask.id,
+        title: dbTask.title,
+        dueDate: new Date(dbTask.due_date),
+        course: dbTask.course_name,
+        courseId: dbTask.canvas_course_id,
+        description: dbTask.description,
+        isManual: true,
+        canvasType: dbTask.canvas_type
+      }));
     
     const totalTasks = todayCanvasTasks.length + todayManualTasks.length;
     
@@ -2021,12 +1990,20 @@ async function sendTasksWeek(senderId) {
       return dueDateManila >= todayManila && dueDateManila <= nextWeekManila;
     });
     
-    // Also get manual tasks due this week
-    const weekManualTasks = (user.assignments || []).filter(task => {
-      if (!task.isManual || !task.dueDate) return false;
-      const dueDateManila = getManilaDate(task.dueDate);
-      return dueDateManila >= todayManila && dueDateManila <= nextWeekManila;
-    });
+    // Get manual tasks from database due this week (database query now handles Manila timezone)
+    const databaseTasks = await db.getUserTasks(senderId, { upcoming: true, daysAhead: 7 });
+    const weekManualTasks = databaseTasks
+      .filter(task => task.is_manual && task.due_date) // Only filter for manual tasks with due dates
+      .map(dbTask => ({
+        id: dbTask.canvas_id || dbTask.id,
+        title: dbTask.title,
+        dueDate: new Date(dbTask.due_date),
+        course: dbTask.course_name,
+        courseId: dbTask.canvas_course_id,
+        description: dbTask.description,
+        isManual: true,
+        canvasType: dbTask.canvas_type
+      }));
     
     const weekTasks = [...weekCanvasTasks, ...weekManualTasks];
     
@@ -2136,14 +2113,30 @@ async function sendOverdueTasks(senderId) {
       return dueDateManila < nowManila && dueDateManila > cutoffDate;
     });
     
-    // Also get manual tasks that are overdue
-    const overdueManualTasks = (user.assignments || []).filter(task => {
-      if (!task.isManual || !task.dueDate) return false;
+    // Get manual tasks from database that are overdue (database query now handles Manila timezone)
+    const databaseTasks = await db.getUserTasks(senderId, { overdue: true });
+    const overdueManualTasks = databaseTasks
+      .filter(task => task.is_manual && task.due_date) // Only filter for manual tasks with due dates
+      .map(dbTask => ({
+        id: dbTask.canvas_id || dbTask.id,
+        title: dbTask.title,
+        dueDate: new Date(dbTask.due_date),
+        course: dbTask.course_name,
+        courseId: dbTask.canvas_course_id,
+        description: dbTask.description,
+        isManual: true,
+        canvasType: dbTask.canvas_type
+      }));
+    
+    // Filter out tasks older than 300 days for UI purposes (database might return more)
+    const cutoffDate = getManilaDate();
+    cutoffDate.setDate(cutoffDate.getDate() - 300);
+    const filteredOverdueManualTasks = overdueManualTasks.filter(task => {
       const dueDateManila = getManilaDate(task.dueDate);
-      return dueDateManila < nowManila && dueDateManila > cutoffDate;
+      return dueDateManila > cutoffDate; // Keep tasks newer than 300 days
     });
     
-    const overdueTasks = [...overdueCanvasTasks, ...overdueManualTasks];
+    const overdueTasks = [...overdueCanvasTasks, ...filteredOverdueManualTasks];
     
     // Sort by how recently they were due (most recent first)
     overdueTasks.sort((a, b) => b.dueDate - a.dueDate);
@@ -2229,10 +2222,30 @@ async function sendAllUpcoming(senderId) {
     const canvasData = await fetchCanvasAssignments(user.canvas_token);
     const nowManila = getManilaDate();
     
-    const upcomingTasks = canvasData.assignments.filter(assignment => {
+    const upcomingCanvasTasks = canvasData.assignments.filter(assignment => {
       const dueDateManila = getManilaDate(assignment.dueDate);
       return dueDateManila >= nowManila;
     });
+    
+    // Get manual tasks from database that are upcoming (database query now handles Manila timezone)
+    const databaseTasks = await db.getUserTasks(senderId, { upcoming: true, daysAhead: 365 }); // Get all upcoming tasks (1 year)
+    const upcomingManualTasks = databaseTasks
+      .filter(task => task.is_manual && task.due_date) // Only filter for manual tasks with due dates
+      .map(dbTask => ({
+        id: dbTask.canvas_id || dbTask.id,
+        title: dbTask.title,
+        dueDate: new Date(dbTask.due_date),
+        course: dbTask.course_name,
+        courseId: dbTask.canvas_course_id,
+        description: dbTask.description,
+        isManual: true,
+        canvasType: dbTask.canvas_type
+      }));
+    
+    const upcomingTasks = [...upcomingCanvasTasks, ...upcomingManualTasks];
+    
+    // Sort all tasks by due date
+    upcomingTasks.sort((a, b) => a.dueDate - b.dueDate);
     
     // Send header message
     await sendMessage({
