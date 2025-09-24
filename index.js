@@ -76,6 +76,51 @@ app.get('/', (req, res) => {
   });
 });
 
+// Debug endpoint to check messenger profile settings
+app.get('/debug/menu', async (req, res) => {
+  try {
+    const profileResponse = await axios.get(
+      `https://graph.facebook.com/v18.0/me/messenger_profile?fields=persistent_menu,get_started,greeting&access_token=${PAGE_ACCESS_TOKEN}`
+    );
+    
+    res.json({
+      status: 'success',
+      messenger_profile: profileResponse.data,
+      note: 'If menu is missing on Android, try these steps:',
+      android_fixes: [
+        '1. Force close and reopen Messenger app',
+        '2. Clear Messenger app cache (Settings > Apps > Messenger > Clear Cache)',
+        '3. Update Messenger to latest version',
+        '4. Switch to a different conversation and back',
+        '5. Wait 5-10 minutes for Facebook to propagate changes',
+        '6. Try accessing via m.facebook.com in Chrome on Android'
+      ]
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: error.message,
+      details: error.response?.data
+    });
+  }
+});
+
+// Endpoint to force refresh the menu
+app.post('/debug/refresh-menu', async (req, res) => {
+  try {
+    await setupPersistentMenu();
+    res.json({
+      status: 'success',
+      message: 'Menu refresh initiated. Please wait 5-10 minutes for changes to propagate.'
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+});
+
 // Webhook verification endpoint
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
@@ -221,42 +266,50 @@ async function handleMessage(senderId, message) {
       return;
     }
     
-    // Route messages based on content and user state
-    switch (userMessage) {
-      case 'get started':
-      case 'hi':
-      case 'hello':
-        if (!user.is_onboarded) {
-          await startOnboardingFlow(senderId);
-        } else {
-          await sendWelcomeMessage(senderId);
-        }
-        break;
-      case 'menu':
-        if (user.is_onboarded) {
-          await sendWelcomeMessage(senderId);
-        } else {
-          await startOnboardingFlow(senderId);
-        }
-        break;
-      case 'activate':
-        await sendActivationMessage(senderId);
-        await updateUser(senderId, { subscription_tier: 'premium' });
-        break;
-      case 'test planner':
-      case 'test dashboard':
-      case 'debug planner':
-        // Hidden debug command to test Planner Notes visibility
-        await testPlannerNotesVisibility(senderId);
-        break;
-      default:
-        // Check if it's a Canvas token
-        if (isCanvasToken(message.text)) {
-          await handleCanvasToken(senderId, message.text);
-        } else {
-          await sendGenericResponse(senderId);
-        }
+    // Handle common navigation commands first
+    if (['menu', 'main menu', 'help'].includes(userMessage)) {
+      if (user.is_onboarded) {
+        await sendWelcomeMessage(senderId);
+        // Add Android-friendly text menu after welcome
+        await sendAndroidFriendlyMenu(senderId);
+      } else {
+        await startOnboardingFlow(senderId);
+      }
+      return;
     }
+    
+    if (userMessage === 'activate') {
+      await sendActivationMessage(senderId);
+      await updateUser(senderId, { subscription_tier: 'premium' });
+      return;
+    }
+    
+    // Hidden debug commands
+    if (['test planner', 'test dashboard', 'debug planner'].includes(userMessage)) {
+      await testPlannerNotesVisibility(senderId);
+      return;
+    }
+    
+    // Check if it's a Canvas token first (these are long alphanumeric strings)
+    if (isCanvasToken(message.text)) {
+      await handleCanvasToken(senderId, message.text);
+      return;
+    }
+    
+    // For new users (not onboarded), ANY message should start onboarding
+    if (!user.is_onboarded) {
+      await startOnboardingFlow(senderId);
+      return;
+    }
+    
+    // For returning users with common greetings, show main menu
+    if (['get started', 'hi', 'hello', 'hey', 'start', 'begin'].includes(userMessage)) {
+      await sendWelcomeMessage(senderId);
+      return;
+    }
+    
+    // Default case: show helpful response with menu suggestion
+    await sendGenericResponse(senderId);
   }
 }
 
@@ -505,6 +558,58 @@ async function handlePostback(senderId, postback) {
   }
 }
 
+// Android-friendly text menu with button fallback
+async function sendAndroidFriendlyMenu(senderId) {
+  // Send button template for Android users who can't see persistent menu
+  const message = {
+    recipient: { id: senderId },
+    message: {
+      attachment: {
+        type: "template",
+        payload: {
+          template_type: "generic",
+          elements: [
+            {
+              title: "Main Menu",
+              subtitle: "Choose an option below:",
+              buttons: [
+                {
+                  type: "postback",
+                  title: "📋 My Tasks",
+                  payload: "MY_TASKS"
+                },
+                {
+                  type: "postback",
+                  title: "🔧 Canvas Setup",
+                  payload: "CANVAS_SETUP"
+                },
+                {
+                  type: "postback",
+                  title: "❓ Help & Support",
+                  payload: "HELP_AND_SUPPORT"
+                }
+              ]
+            },
+            {
+              title: "Premium Features",
+              subtitle: "Unlock advanced capabilities",
+              buttons: [
+                {
+                  type: "postback",
+                  title: "🌟 Upgrade Premium",
+                  payload: "UPGRADE_TO_PREMIUM"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  };
+  
+  await sendMessage(message);
+}
+
 // Welcome message (simplified now that we have persistent menu)
 async function sendWelcomeMessage(senderId) {
   const user = await getUser(senderId);
@@ -513,7 +618,7 @@ async function sendWelcomeMessage(senderId) {
   const message = {
     recipient: { id: senderId },
     message: {
-      text: `Welcome back${userName}! 🎉\n\nUse the menu button below to access:\n📋 My Tasks - View your assignments\n🔧 Canvas Setup - Configure your connection\n❓ Help & Support - Get assistance\n🌟 Upgrade to Premium - Unlock all features\n\nWhat would you like to do today?`
+      text: `Welcome back${userName}! 🎉\n\nUse the menu button (☰) below to access:\n📋 My Tasks - View your assignments\n🔧 Canvas Setup - Configure your connection\n❓ Help & Support - Get assistance\n🌟 Upgrade to Premium - Unlock all features\n\n📱 Android users: If you don't see the menu button, type 'menu' or use the quick options below.\n\nWhat would you like to do today?`
     }
   };
   
@@ -1600,6 +1705,54 @@ function formatDateTimeManila(date) {
   });
 }
 
+// Format assignment details in code block style for better readability
+function formatAssignmentMessage(assignment, options = {}) {
+  const { showCourseTag = false, isManual = false } = options;
+  
+  const dueTime = assignment.dueDate.toLocaleString('en-US', {
+    timeZone: 'Asia/Manila',
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
+  
+  // Build the assignment URL if available
+  let assignmentUrl = '';
+  if (assignment.htmlUrl) {
+    assignmentUrl = assignment.htmlUrl;
+  } else if (assignment.courseId && assignment.id) {
+    const canvasUrl = process.env.CANVAS_BASE_URL || 'https://dlsu.instructure.com';
+    assignmentUrl = `${canvasUrl}/courses/${assignment.courseId}/assignments/${assignment.id}`;
+  }
+  
+  // Format the message in a code block style
+  let message = '```\n';
+  message += `📝 ${assignment.title}${isManual ? ' (Manual)' : ''}\n`;
+  message += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  
+  if (showCourseTag || assignment.course) {
+    message += `📚 Course: ${assignment.course || 'Personal'}\n`;
+  }
+  
+  message += `⏰ Due: ${dueTime}\n`;
+  
+  if (assignment.pointsPossible) {
+    message += `💯 Points: ${assignment.pointsPossible}\n`;
+  }
+  
+  message += '```\n';
+  
+  // Add link after code block if available
+  if (assignmentUrl) {
+    message += `\n🔗 [Open in Canvas](${assignmentUrl})`;
+  }
+  
+  return message;
+}
+
 // Task display functions
 async function sendTasksToday(senderId) {
   const user = await getUser(senderId);
@@ -1645,18 +1798,7 @@ async function sendTasksToday(senderId) {
     if (totalTasks > 0) {
       // Send Canvas assignments first
       for (const assignment of todayCanvasTasks) {
-        const dueTime = assignment.dueDate.toLocaleTimeString('en-US', {
-          timeZone: 'Asia/Manila',
-          hour: 'numeric',
-          minute: '2-digit',
-          hour12: true
-        });
-        
-        const assignmentText = `📝 **${assignment.title}**\n` +
-                              `📚 ${assignment.course}\n` +
-                              `⏰ Due: Today at ${dueTime}\n` +
-                              (assignment.pointsPossible ? `💯 Points: ${assignment.pointsPossible}\n` : '') +
-                              `🔗 [Open in Canvas](${assignment.htmlUrl})`;
+        const assignmentText = formatAssignmentMessage(assignment, { showCourseTag: true });
         
         await sendMessage({
           recipient: { id: senderId },
@@ -1668,16 +1810,7 @@ async function sendTasksToday(senderId) {
       
       // Send manual tasks
       for (const task of todayManualTasks) {
-        const dueTime = task.dueDate.toLocaleTimeString('en-US', {
-          timeZone: 'Asia/Manila',
-          hour: 'numeric',
-          minute: '2-digit',
-          hour12: true
-        });
-        
-        const taskText = `📝 **${task.title}** (🔄 Manual)\n` +
-                        `📚 ${task.course}\n` +
-                        `⏰ Due: Today at ${dueTime}`;
+        const taskText = formatAssignmentMessage(task, { showCourseTag: true, isManual: true });
         
         await sendMessage({
           recipient: { id: senderId },
@@ -1781,19 +1914,10 @@ async function sendTasksWeek(senderId) {
         });
         
         for (const assignment of tasks) {
-          const dueTime = assignment.dueDate.toLocaleTimeString('en-US', {
-            timeZone: 'Asia/Manila',
-            hour: 'numeric',
-            minute: '2-digit',
-            hour12: true
+          const assignmentText = formatAssignmentMessage(assignment, { 
+            showCourseTag: true, 
+            isManual: assignment.isManual 
           });
-          
-          // Check if this is a manual task
-          const isManual = assignment.isManual;
-          const assignmentText = `📝 ${assignment.title}${isManual ? ' (🔄 Manual)' : ''}\n` +
-                                `📚 ${assignment.course}\n` +
-                                `⏰ Due: ${dueTime}\n` +
-                                (assignment.pointsPossible ? `💯 Points: ${assignment.pointsPossible}` : '');
           
           await sendMessage({
             recipient: { id: senderId },
@@ -1887,12 +2011,14 @@ async function sendOverdueTasks(senderId) {
         const daysOverdue = Math.floor((nowManila - assignment.dueDate) / (1000 * 60 * 60 * 24));
         const overdueText = daysOverdue === 1 ? '1 day' : `${daysOverdue} days`;
         
-        const isManual = assignment.isManual;
-        const assignmentText = `⚠ **${assignment.title}${isManual ? ' (🔄 Manual)' : ''}**\n` +
-                              `📚 ${assignment.course}\n` +
-                              `⏰ Was due: ${formatDueDate(assignment.dueDate)}\n` +
-                              `📅 Overdue by: ${overdueText}\n` +
-                              (assignment.pointsPossible ? `💯 Points: ${assignment.pointsPossible}` : '');
+        // Use formatter with additional overdue information
+        let assignmentText = formatAssignmentMessage(assignment, { 
+          showCourseTag: true, 
+          isManual: assignment.isManual 
+        });
+        
+        // Add overdue indicator
+        assignmentText = assignmentText.replace('```', `🔴 OVERDUE: ${overdueText}\n\`\`\``);
         
         await sendMessage({
           recipient: { id: senderId },
@@ -1989,23 +2115,10 @@ async function sendAllUpcoming(senderId) {
         });
         
         for (const assignment of tasks) {
-          const dueDate = assignment.dueDate.toLocaleDateString('en-US', {
-            timeZone: 'Asia/Manila',
-            weekday: 'short',
-            month: 'short',
-            day: 'numeric'
+          const assignmentText = formatAssignmentMessage(assignment, { 
+            showCourseTag: true,
+            isManual: assignment.isManual
           });
-          const dueTime = assignment.dueDate.toLocaleTimeString('en-US', {
-            timeZone: 'Asia/Manila',
-            hour: 'numeric',
-            minute: '2-digit',
-            hour12: true
-          });
-          
-          const assignmentText = `📝 ${assignment.title}\n` +
-                                `📚 ${assignment.course}\n` +
-                                `⏰ ${dueDate} at ${dueTime}\n` +
-                                (assignment.pointsPossible ? `💯 Points: ${assignment.pointsPossible}` : '');
           
           await sendMessage({
             recipient: { id: senderId },
@@ -2401,7 +2514,7 @@ async function sendGenericResponse(senderId) {
   const message = {
     recipient: { id: senderId },
     message: {
-      text: "I'm not sure how to help with that. Try saying 'menu' to see what I can do! 🤖"
+      text: "I didn't quite understand that. Here are some things you can try:\n\n• Say 'menu' to see all options\n• Use the menu button below\n• Check your tasks with 'due today' or 'due this week'\n• Add a task by saying 'add task'\n\nWhat would you like to do? 🤖"
     }
   };
   
@@ -2736,6 +2849,23 @@ app.use((error, req, res, next) => {
 
 // Function to set up the persistent menu (hamburger menu)
 async function setupPersistentMenu() {
+  // First, delete any existing menu to ensure clean setup
+  try {
+    await axios.delete(
+      `https://graph.facebook.com/v18.0/me/messenger_profile?access_token=${PAGE_ACCESS_TOKEN}`,
+      {
+        data: { fields: ["persistent_menu"] },
+        headers: { 'Content-Type': 'application/json' }
+      }
+    );
+    console.log('Cleared existing persistent menu');
+  } catch (error) {
+    console.log('No existing menu to clear or error clearing:', error.message);
+  }
+  
+  // Add small delay to ensure deletion is processed
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  
   const menuData = {
     persistent_menu: [
       {
@@ -2758,7 +2888,34 @@ async function setupPersistentMenu() {
             payload: "HELP_AND_SUPPORT"
           },
           {
-            title: "🌟 Upgrade to Premium",
+            title: "🌟 Upgrade Premium",  // Shortened to fit Android's smaller display
+            type: "postback",
+            payload: "UPGRADE_TO_PREMIUM"
+          }
+        ]
+      },
+      // Add specific locale for English to ensure consistency
+      {
+        locale: "en_US",
+        composer_input_disabled: false,
+        call_to_actions: [
+          {
+            title: "📋 My Tasks",
+            type: "postback",
+            payload: "MY_TASKS"
+          },
+          {
+            title: "🔧 Canvas Setup",
+            type: "postback",
+            payload: "CANVAS_SETUP"
+          },
+          {
+            title: "❓ Help & Support",
+            type: "postback",
+            payload: "HELP_AND_SUPPORT"
+          },
+          {
+            title: "🌟 Upgrade Premium",
             type: "postback",
             payload: "UPGRADE_TO_PREMIUM"
           }
@@ -2777,7 +2934,13 @@ async function setupPersistentMenu() {
         }
       }
     );
-    console.log('Persistent menu configured successfully');
+    console.log('Persistent menu configured successfully:', response.data);
+    
+    // Verify the menu was set correctly
+    const verifyResponse = await axios.get(
+      `https://graph.facebook.com/v18.0/me/messenger_profile?fields=persistent_menu&access_token=${PAGE_ACCESS_TOKEN}`
+    );
+    console.log('Menu verification:', JSON.stringify(verifyResponse.data, null, 2));
   } catch (error) {
     console.error('Failed to set persistent menu:', error.response?.data || error.message);
   }

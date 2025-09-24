@@ -210,6 +210,13 @@ Essential variables required for deployment:
 
 ### Common Issues
 
+0. **Android Menu Not Appearing**
+   - This is a known Facebook Messenger platform issue on some Android devices
+   - Users can type 'menu' to access all features via button template
+   - Check `/debug/menu` endpoint to verify menu is configured correctly
+   - See `ANDROID_MENU_FIX.md` for detailed troubleshooting steps
+   - Android users should clear Messenger cache and update to latest version
+
 1. **Webhook Verification Failing**
    - Verify `VERIFY_TOKEN` matches between Facebook app and environment
    - Check that the callback URL is correct in Facebook developer portal
