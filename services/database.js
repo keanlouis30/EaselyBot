@@ -295,6 +295,28 @@ async function createTask(senderId, taskData) {
       return null;
     }
     
+    // Automatically create reminder for the new task (free users get 24-hour reminder)
+    if (data && taskData.dueDate) {
+      try {
+        const dueDate = new Date(taskData.dueDate);
+        const reminderTime = new Date(dueDate.getTime() - 24 * 60 * 60 * 1000); // 24 hours before
+        
+        // Only create reminder if it's in the future
+        if (reminderTime > new Date()) {
+          await createReminder({
+            task_id: data.id,
+            user_id: user.id,
+            reminder_time: reminderTime,
+            reminder_type: '1_day'
+          });
+          console.log(`Reminder created for task ${data.id}`);
+        }
+      } catch (reminderError) {
+        console.error('Error creating reminder for task:', reminderError);
+        // Don't fail task creation if reminder creation fails
+      }
+    }
+    
     return data;
   } catch (err) {
     console.error('Database error in createTask:', err);
@@ -319,7 +341,7 @@ async function syncCanvasAssignments(senderId, assignments) {
       
       if (!existing) {
         // Create new task from Canvas assignment
-        await supabase
+        const { data: newTask, error } = await supabase
           .from('tasks')
           .insert({
             user_id: user.id,
@@ -335,7 +357,30 @@ async function syncCanvasAssignments(senderId, assignments) {
             html_url: assignment.htmlUrl,
             has_submitted: assignment.hasSubmitted,
             is_manual: false
-          });
+          })
+          .select()
+          .single();
+        
+        // Create reminder for synced assignment if due date is in the future
+        if (newTask && assignment.dueDate && !error) {
+          try {
+            const dueDate = new Date(assignment.dueDate);
+            const reminderTime = new Date(dueDate.getTime() - 24 * 60 * 60 * 1000); // 24 hours before
+            
+            // Only create reminder if it's in the future
+            if (reminderTime > new Date()) {
+              await createReminder({
+                task_id: newTask.id,
+                user_id: user.id,
+                reminder_time: reminderTime,
+                reminder_type: '1_day'
+              });
+              console.log(`Reminder created for Canvas assignment ${newTask.id}`);
+            }
+          } catch (reminderError) {
+            console.error('Error creating reminder for Canvas assignment:', reminderError);
+          }
+        }
       }
     }
     
@@ -411,6 +456,152 @@ async function cleanupExpiredSessions() {
   }
 }
 
+// Reminder functions
+async function createReminder(reminderData) {
+  try {
+    const { data, error } = await supabase
+      .from('reminders')
+      .insert(reminderData)
+      .select()
+      .single();
+    
+    if (error) {
+      // If it's a duplicate reminder, that's ok
+      if (error.code === '23505') {
+        console.log('Reminder already exists for this task and type');
+        return null;
+      }
+      console.error('Error creating reminder:', error);
+      return null;
+    }
+    
+    return data;
+  } catch (err) {
+    console.error('Database error in createReminder:', err);
+    return null;
+  }
+}
+
+async function getUnsentReminders() {
+  try {
+    const now = new Date().toISOString();
+    
+    const { data, error } = await supabase
+      .from('reminders')
+      .select('*')
+      .eq('is_sent', false)
+      .lte('reminder_time', now)
+      .order('reminder_time');
+    
+    if (error) {
+      console.error('Error fetching unsent reminders:', error);
+      return [];
+    }
+    
+    return data || [];
+  } catch (err) {
+    console.error('Database error in getUnsentReminders:', err);
+    return [];
+  }
+}
+
+async function markReminderAsSent(reminderId) {
+  try {
+    const { error } = await supabase
+      .from('reminders')
+      .update({ 
+        is_sent: true, 
+        sent_at: new Date().toISOString() 
+      })
+      .eq('id', reminderId);
+    
+    if (error) {
+      console.error('Error marking reminder as sent:', error);
+      return false;
+    }
+    
+    return true;
+  } catch (err) {
+    console.error('Database error in markReminderAsSent:', err);
+    return false;
+  }
+}
+
+async function getTasksNeedingReminders(userId) {
+  try {
+    // Get tasks that don't have reminders yet
+    const { data, error } = await supabase
+      .from('tasks')
+      .select(`
+        *,
+        reminders!left (
+          id,
+          reminder_type
+        )
+      `)
+      .eq('user_id', userId)
+      .eq('is_completed', false)
+      .not('due_date', 'is', null)
+      .gte('due_date', new Date().toISOString());
+    
+    if (error) {
+      console.error('Error fetching tasks needing reminders:', error);
+      return [];
+    }
+    
+    // Filter tasks that don't have a 1_day reminder (for free users)
+    const tasksNeedingReminders = (data || []).filter(task => {
+      const hasOneDayReminder = task.reminders?.some(r => r.reminder_type === '1_day');
+      return !hasOneDayReminder;
+    });
+    
+    return tasksNeedingReminders;
+  } catch (err) {
+    console.error('Database error in getTasksNeedingReminders:', err);
+    return [];
+  }
+}
+
+async function getUserById(userId) {
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', userId)
+      .single();
+    
+    if (error) {
+      console.error('Error fetching user by ID:', error);
+      return null;
+    }
+    
+    return data;
+  } catch (err) {
+    console.error('Database error in getUserById:', err);
+    return null;
+  }
+}
+
+async function getTaskById(taskId) {
+  try {
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('*')
+      .eq('id', taskId)
+      .single();
+    
+    if (error) {
+      console.error('Error fetching task by ID:', error);
+      return null;
+    }
+    
+    return data;
+  } catch (err) {
+    console.error('Database error in getTaskById:', err);
+    return null;
+  }
+}
+
 module.exports = {
   supabase,
   getUser,
@@ -426,5 +617,12 @@ module.exports = {
   getAllUsers,
   cleanupExpiredSessions,
   encryptToken,
-  decryptToken
+  decryptToken,
+  // Reminder functions
+  createReminder,
+  getUnsentReminders,
+  markReminderAsSent,
+  getTasksNeedingReminders,
+  getUserById,
+  getTaskById
 };

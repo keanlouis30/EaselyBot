@@ -35,17 +35,21 @@ services:
     databaseName: easely_db
     user: easely_user
     
-  # Background job for reminders (future implementation)
-  # - type: cron
-  #   name: easely-reminders
-  #   env: node
-  #   schedule: "0 * * * *"  # Every hour
-  #   buildCommand: npm install
-  #   startCommand: node jobs/send-reminders.js
-  #   envVars:
-  #     - key: NODE_ENV
-  #       value: production
-  #     - key: DATABASE_URL
-  #       fromDatabase:
-  #         name: easely-db
-  #         property: connectionString
+  # Background job for reminders - sends notifications 24 hours before deadlines
+  - type: cron
+    name: easely-reminders
+    env: node
+    schedule: "0 * * * *"  # Every hour
+    buildCommand: npm install
+    startCommand: node jobs/send-reminders.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PAGE_ACCESS_TOKEN
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
