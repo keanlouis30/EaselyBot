@@ -1212,15 +1212,19 @@ async function createTask(senderId, title, timeInput) {
 
 // Create a Planner Note (To-Do) in Canvas
 async function createCanvasPlannerNote(senderId, { title, description, dueDate, courseId, courseName }) {
+  console.log(`🎯 createCanvasPlannerNote called for user ${senderId}:`, { title, description, courseId, courseName, dueDate: dueDate.toISOString() });
+  
   const user = await getUser(senderId);
   if (!user || !user.canvas_token) {
-    await sendMessage({ recipient: { id: senderId }, message: { text: '❌ No Canvas token found. Please set up Canvas first from the menu: Canvas Setup.' } });
-    return null;
+    console.warn(`⚠️ No Canvas token found for user ${senderId}, will create local-only task`);
+    return null; // Fail silently, let the calling function handle the fallback
   }
   
   const canvasUrl = process.env.CANVAS_BASE_URL || 'https://dlsu.instructure.com';
   const whenText = formatDateTimeManila(dueDate);
   const courseLabel = courseId ? (courseName || 'Selected Course') : 'Personal';
+  
+  console.log(`🌐 Canvas URL: ${canvasUrl}, Course: ${courseLabel}`);
   
   // Send loading message first
   await sendMessage({
@@ -1237,7 +1241,7 @@ async function createCanvasPlannerNote(senderId, { title, description, dueDate, 
     };
     if (courseId) plannerBody.course_id = courseId;
     
-    console.log('Creating Canvas Planner Note:', plannerBody);
+    console.log('📋 Creating Canvas Planner Note with body:', plannerBody);
     
     const plannerResponse = await axios.post(`${canvasUrl}/api/v1/planner_notes`, plannerBody, {
       headers: {
@@ -1247,7 +1251,7 @@ async function createCanvasPlannerNote(senderId, { title, description, dueDate, 
       timeout: 15000
     });
     
-    console.log('Planner Note created successfully:', plannerResponse.data);
+    console.log('✅ Planner Note created successfully:', plannerResponse.data);
     
       await sendMessage({
         recipient: { id: senderId },
@@ -1270,11 +1274,19 @@ async function createCanvasPlannerNote(senderId, { title, description, dueDate, 
     };
     
   } catch (plannerError) {
-    console.error('Planner Note creation failed:', plannerError.response?.data || plannerError.message);
+    console.error(`❌ Planner Note creation failed for user ${senderId}:`, {
+      message: plannerError.message,
+      status: plannerError.response?.status,
+      statusText: plannerError.response?.statusText,
+      data: plannerError.response?.data,
+      url: plannerError.config?.url
+    });
+    
     // Provide more structured logging if available
     if (plannerError.response) {
-      console.error('Planner Note failure status:', plannerError.response.status);
-      try { console.error('Planner Note failure body:', JSON.stringify(plannerError.response.data)); } catch (e) {}
+      console.error(`❌ HTTP ${plannerError.response.status} - Planner Note failure:`, plannerError.response.data);
+    } else {
+      console.error(`❌ Network/Timeout error:`, plannerError.message);
     }
     
     // If Planner Notes fail, try creating as Calendar Event
@@ -2394,36 +2406,125 @@ async function handleTaskDateQuickReply(senderId, dateType) {
 
 // Handle task time quick replies
 async function handleTaskTimeQuickReply(senderId, hour, minute) {
+  console.log(`⏰ Processing time selection for user ${senderId}: ${hour}:${minute}`);
+  
   const session = await getUserSession(senderId);
   if (!session || session.flow !== 'add_task' || session.step !== 'time' || !session.taskDate) {
+    console.error(`❌ Invalid session state for user ${senderId}:`, {
+      hasSession: !!session,
+      flow: session?.flow,
+      step: session?.step,
+      hasTaskDate: !!session?.taskDate
+    });
     await sendGenericResponse(senderId);
     return;
   }
   
-  // Combine stored date with selected time
-  const finalDateTime = combineDateAndTime(session.taskDate, { hour, minute });
-  
-  // Create the task in Canvas using Planner Notes
-  const createdTask = await createCanvasPlannerNote(senderId, {
+  console.log(`📝 Task details:`, {
     title: session.taskTitle,
-    description: session.description || '',
-    dueDate: finalDateTime,
-    courseId: session.courseId || null,
-    courseName: session.courseName || 'Personal'
+    description: session.description,
+    course: session.courseName,
+    courseId: session.courseId,
+    taskDate: session.taskDate
   });
   
-  // If task was successfully created in Canvas, also store it in database
-  if (createdTask) {
-    await db.createTask(senderId, createdTask);
-    console.log(`Task '${createdTask.title}' stored in database for user ${senderId}`);
+  try {
+    // Ensure taskDate is a Date object (it might be stored as string)
+    const taskDate = session.taskDate instanceof Date ? session.taskDate : new Date(session.taskDate);
+    console.log(`📋 Retrieved task date:`, taskDate.toISOString());
+    
+    // Combine stored date with selected time
+    const finalDateTime = combineDateAndTime(taskDate, { hour, minute });
+    console.log(`🗓️ Final task date/time: ${finalDateTime.toISOString()}`);
+    
+    // Send immediate acknowledgment to user
+    await sendMessage({
+      recipient: { id: senderId },
+      message: { text: `⏳ Creating your task "${session.taskTitle}"...` }
+    });
+    
+    // Create the task in Canvas using Planner Notes
+    console.log(`🔄 Starting Canvas task creation for user ${senderId}`);
+    const createdTask = await createCanvasPlannerNote(senderId, {
+      title: session.taskTitle,
+      description: session.description || '',
+      dueDate: finalDateTime,
+      courseId: session.courseId || null,
+      courseName: session.courseName || 'Personal'
+    });
+    
+    if (createdTask) {
+      console.log(`✅ Canvas task created successfully:`, createdTask.title);
+      
+      // If task was successfully created in Canvas, also store it in database
+      try {
+        await db.createTask(senderId, createdTask);
+        console.log(`💾 Task '${createdTask.title}' stored in database for user ${senderId}`);
+      } catch (dbError) {
+        console.error('❌ Database storage failed:', dbError);
+        // Still continue even if database storage fails
+      }
+    } else {
+      console.warn(`⚠️ Canvas task creation failed, creating local fallback task`);
+      
+      // Create a fallback local task when Canvas creation fails
+      const fallbackTask = {
+        title: session.taskTitle,
+        dueDate: finalDateTime,
+        course: session.courseName || 'Personal',
+        courseId: session.courseId || null,
+        description: session.description || '',
+        createdAt: new Date().toISOString(),
+        isManual: true,
+        canvasId: null,
+        canvasType: null // NULL for local-only tasks to avoid DB constraint violation
+      };
+      
+      try {
+        await db.createTask(senderId, fallbackTask);
+        console.log(`💾 Fallback task stored in database for user ${senderId}`);
+        
+        // Send success message with note about Canvas sync failure
+        await sendMessage({
+          recipient: { id: senderId },
+          message: { 
+            text: `✅ Task "${session.taskTitle}" created successfully!\n\n🗓️ Due: ${formatDateTimeManila(finalDateTime)}\n💻 Course: ${session.courseName || 'Personal'}\n\n⚠️ Note: Could not sync to Canvas Dashboard. You may need to add it manually to Canvas if needed.` 
+          }
+        });
+      } catch (dbError) {
+        console.error('❌ Fallback task creation also failed:', dbError);
+        
+        // Last resort: just acknowledge the task was received
+        await sendMessage({
+          recipient: { id: senderId },
+          message: { 
+            text: `❌ Sorry, I couldn't save your task "${session.taskTitle}" to the system. Please add it manually to Canvas.\n\n🗓️ Due: ${formatDateTimeManila(finalDateTime)}\n💻 Course: ${session.courseName || 'Personal'}` 
+          }
+        });
+      }
+    }
+    
+  } catch (error) {
+    console.error(`💥 Unexpected error in handleTaskTimeQuickReply for user ${senderId}:`, error);
+    
+    // Send error message to user
+    await sendMessage({
+      recipient: { id: senderId },
+      message: { 
+        text: `❌ Sorry, there was an error creating your task "${session.taskTitle}". Please try again or add it manually to Canvas.` 
+      }
+    });
+  } finally {
+    // Always clean up session and show welcome message
+    console.log(`🧹 Cleaning up session for user ${senderId}`);
+    await clearUserSession(senderId);
+    
+    // Show updated task list after a moment
+    setTimeout(async () => {
+      console.log(`🏠 Showing welcome message to user ${senderId}`);
+      await sendWelcomeMessage(senderId);
+    }, 2000);
   }
-  
-  await clearUserSession(senderId);
-  
-  // Show updated task list after a moment
-  setTimeout(async () => {
-    await sendWelcomeMessage(senderId);
-  }, 2000);
 }
 
 
