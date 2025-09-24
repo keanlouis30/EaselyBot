@@ -22,10 +22,29 @@ async function mockClearUserSession(senderId) {
   return await db.clearUserSession(senderId);
 }
 
-// Mock the date/time functions
+// Mock the date/time functions (FIXED for Manila timezone)
 function getManilaDate(date = new Date()) {
-  const manilaTime = new Date(date.toLocaleString("en-US", {timeZone: "Asia/Manila"}));
-  return manilaTime;
+  // Get the current Manila time using proper timezone conversion
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+  
+  const parts = formatter.formatToParts(date);
+  const year = parseInt(parts.find(p => p.type === 'year').value);
+  const month = parseInt(parts.find(p => p.type === 'month').value);
+  const day = parseInt(parts.find(p => p.type === 'day').value);
+  const hour = parseInt(parts.find(p => p.type === 'hour').value);
+  const minute = parseInt(parts.find(p => p.type === 'minute').value);
+  
+  // Create a proper Manila time Date object
+  return buildManilaDateFromParts({ year, month, day, hour, minute });
 }
 
 function buildManilaDateFromParts({ year, month, day, hour = 17, minute = 0 }) {
@@ -38,10 +57,23 @@ function buildManilaDateFromParts({ year, month, day, hour = 17, minute = 0 }) {
 }
 
 function combineDateAndTime(dateObj, timeObj) {
+  // Extract date parts in Manila timezone using Intl.DateTimeFormat
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  
+  const parts = formatter.formatToParts(dateObj);
+  const year = parseInt(parts.find(p => p.type === 'year').value);
+  const month = parseInt(parts.find(p => p.type === 'month').value);
+  const day = parseInt(parts.find(p => p.type === 'day').value);
+  
   return buildManilaDateFromParts({
-    year: dateObj.getFullYear(),
-    month: dateObj.getMonth() + 1,
-    day: dateObj.getDate(),
+    year,
+    month,
+    day,
     hour: timeObj.hour,
     minute: timeObj.minute
   });
@@ -222,20 +254,36 @@ async function setupTestUser() {
   }
   
   // Set up session as if user went through the full task creation flow
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  // Use proper Manila timezone for "today"
+  const getManilaDateParts = (date) => {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Manila',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    const parts = formatter.formatToParts(date);
+    return {
+      year: parseInt(parts.find(p => p.type === 'year').value),
+      month: parseInt(parts.find(p => p.type === 'month').value),
+      day: parseInt(parts.find(p => p.type === 'day').value)
+    };
+  };
+  
+  const todayParts = getManilaDateParts(new Date());
+  console.log('🗓️ Using today in Manila timezone:', todayParts);
   
   const sessionData = {
     flow: 'add_task',
     step: 'time',
-    taskTitle: 'Test Task from Debug',
-    description: 'This is a test task created during debugging',
+    taskTitle: 'Test Task for Today (Manila)',
+    description: 'This task should be due TODAY in Manila timezone',
     courseName: 'Personal',
     courseId: null,
     taskDate: buildManilaDateFromParts({
-      year: tomorrow.getFullYear(),
-      month: tomorrow.getMonth() + 1,
-      day: tomorrow.getDate(),
+      year: todayParts.year,
+      month: todayParts.month,
+      day: todayParts.day,
       hour: 0,
       minute: 0
     })

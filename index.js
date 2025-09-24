@@ -1465,22 +1465,54 @@ async function listUserCourses(token) {
   return (res.data || []).map(c => ({ id: c.id, name: c.name }));
 }
 
-// Combine date and time into a single Date object
+// Combine date and time into a single Date object (using Manila timezone)
 function combineDateAndTime(dateObj, timeObj) {
+  // Extract date parts in Manila timezone using Intl.DateTimeFormat
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  
+  const parts = formatter.formatToParts(dateObj);
+  const year = parseInt(parts.find(p => p.type === 'year').value);
+  const month = parseInt(parts.find(p => p.type === 'month').value);
+  const day = parseInt(parts.find(p => p.type === 'day').value);
+  
   return buildManilaDateFromParts({
-    year: dateObj.getFullYear(),
-    month: dateObj.getMonth() + 1,
-    day: dateObj.getDate(),
+    year,
+    month,
+    day,
     hour: timeObj.hour,
     minute: timeObj.minute
   });
 }
 
-// Helper function to get Manila timezone date
+// Helper function to get current date/time in Manila timezone
 function getManilaDate(date = new Date()) {
-  // Create a new Date object that represents the current Manila time
-  const manilaTime = new Date(date.toLocaleString("en-US", {timeZone: "Asia/Manila"}));
-  return manilaTime;
+  // Get the current Manila time using proper timezone conversion
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+  
+  const parts = formatter.formatToParts(date);
+  const year = parseInt(parts.find(p => p.type === 'year').value);
+  const month = parseInt(parts.find(p => p.type === 'month').value);
+  const day = parseInt(parts.find(p => p.type === 'day').value);
+  const hour = parseInt(parts.find(p => p.type === 'hour').value);
+  const minute = parseInt(parts.find(p => p.type === 'minute').value);
+  const second = parseInt(parts.find(p => p.type === 'second').value);
+  
+  // Create a proper Manila time Date object
+  return buildManilaDateFromParts({ year, month, day, hour, minute });
 }
 
 // Helper function to check if two dates are the same day in Manila timezone
@@ -1514,12 +1546,46 @@ function buildManilaDateFromParts({ year, month, day, hour = 17, minute = 0 }) {
 // targetDow: 0=Sun ... 6=Sat. If preferNext is true and today is the target, returns next week's target.
 function getTargetWeekdayManila(targetDow, preferNext = false) {
   const now = getManilaDate();
-  const dow = now.getDay();
+  
+  // Get the day of week in Manila timezone
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Manila',
+    weekday: 'numeric' // Returns 1=Sunday, 2=Monday, etc.
+  });
+  
+  // Convert to standard 0=Sun format
+  const manilaWeekday = new Date().toLocaleDateString('en-US', { 
+    timeZone: 'Asia/Manila',
+    weekday: 'long'
+  });
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const dow = dayNames.indexOf(manilaWeekday);
+  
   let delta = (targetDow - dow + 7) % 7;
   if (delta === 0 && preferNext) delta = 7;
-  const target = new Date(now);
-  target.setDate(target.getDate() + delta);
-  return target;
+  
+  // Add the delta days to get the target date in Manila timezone
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(now);
+  
+  const year = parseInt(parts.find(p => p.type === 'year').value);
+  const month = parseInt(parts.find(p => p.type === 'month').value);
+  const day = parseInt(parts.find(p => p.type === 'day').value);
+  
+  // Create target date by adding delta days
+  const targetDate = new Date(year, month - 1, day + delta);
+  
+  return buildManilaDateFromParts({
+    year: targetDate.getFullYear(),
+    month: targetDate.getMonth() + 1,
+    day: targetDate.getDate(),
+    hour: 0,
+    minute: 0
+  });
 }
 
 function formatDateTimeManila(date) {
@@ -2353,43 +2419,63 @@ async function handleTaskDateQuickReply(senderId, dateType) {
   const now = getManilaDate();
   let taskDate;
   
+  // Helper function to extract Manila date components
+  const getManilaDateParts = (date) => {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Manila',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    const parts = formatter.formatToParts(date);
+    return {
+      year: parseInt(parts.find(p => p.type === 'year').value),
+      month: parseInt(parts.find(p => p.type === 'month').value),
+      day: parseInt(parts.find(p => p.type === 'day').value)
+    };
+  };
+  
   switch (dateType) {
     case 'today':
+      const todayParts = getManilaDateParts(new Date());
       taskDate = buildManilaDateFromParts({
-        year: now.getFullYear(),
-        month: now.getMonth() + 1,
-        day: now.getDate(),
+        year: todayParts.year,
+        month: todayParts.month,
+        day: todayParts.day,
         hour: 0,
         minute: 0
       });
       break;
     case 'tomorrow':
-      const tomorrow = new Date(now);
-      tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrow = new Date();
+      tomorrow.setUTCDate(tomorrow.getUTCDate() + 1); // Add 1 day in UTC to avoid timezone confusion
+      const tomorrowParts = getManilaDateParts(tomorrow);
       taskDate = buildManilaDateFromParts({
-        year: tomorrow.getFullYear(),
-        month: tomorrow.getMonth() + 1,
-        day: tomorrow.getDate(),
+        year: tomorrowParts.year,
+        month: tomorrowParts.month,
+        day: tomorrowParts.day,
         hour: 0,
         minute: 0
       });
       break;
     case 'friday':
       const targetFriday = getTargetWeekdayManila(5, true); // 5 = Friday, preferNext = true
+      const fridayParts = getManilaDateParts(targetFriday);
       taskDate = buildManilaDateFromParts({
-        year: targetFriday.getFullYear(),
-        month: targetFriday.getMonth() + 1,
-        day: targetFriday.getDate(),
+        year: fridayParts.year,
+        month: fridayParts.month,
+        day: fridayParts.day,
         hour: 0,
         minute: 0
       });
       break;
     case 'nextmonday':
       const targetMonday = getTargetWeekdayManila(1, true); // 1 = Monday, preferNext = true
+      const mondayParts = getManilaDateParts(targetMonday);
       taskDate = buildManilaDateFromParts({
-        year: targetMonday.getFullYear(),
-        month: targetMonday.getMonth() + 1,
-        day: targetMonday.getDate(),
+        year: mondayParts.year,
+        month: mondayParts.month,
+        day: mondayParts.day,
         hour: 0,
         minute: 0
       });
