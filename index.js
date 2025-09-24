@@ -2765,6 +2765,10 @@ async function broadcastMessage(message, targetUsers = 'all', testMode = false) 
   let targetUserIds = [];
   
   if (targetUsers === 'all') {
+    // Send to all onboarded users (legacy support)
+    const users = await db.getAllUsers('onboarded');
+    targetUserIds = users.map(user => user.sender_id);
+  } else if (targetUsers === 'onboarded') {
     // Send to all onboarded users
     const users = await db.getAllUsers('onboarded');
     targetUserIds = users.map(user => user.sender_id);
