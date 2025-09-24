@@ -332,6 +332,33 @@ async function handleSessionFlow(senderId, messageText, session) {
   const user = await getUser(senderId);
   
   switch (session.flow) {
+    case 'waiting_for_token':
+      // User is expected to input a Canvas token
+      if (isCanvasToken(messageText)) {
+        await clearUserSession(senderId); // Clear session before handling token
+        await handleCanvasToken(senderId, messageText);
+      } else {
+        // Invalid token format - provide helpful feedback
+        await sendMessage({
+          recipient: { id: senderId },
+          message: {
+            text: `❌ That doesn't look like a valid Canvas token.\n\nCanvas tokens are typically:\n• 64+ characters long\n• Contains letters, numbers, and ~ symbols\n• Example: 7~abcd1234efgh5678...\n\nPlease paste your Canvas Access Token here, or get help below:`,
+            quick_replies: [
+              {
+                content_type: "text",
+                title: "❓ Show Tutorial",
+                payload: "SHOW_TUTORIAL"
+              },
+              {
+                content_type: "text",
+                title: "🎥 Watch Video",
+                payload: "SHOW_VIDEO_TUTORIAL"
+              }
+            ]
+          }
+        });
+      }
+      break;
     case 'add_task':
       if (session.step === 'title') {
         // Store task title, then ask for course
@@ -419,6 +446,8 @@ async function handleQuickReply(senderId, payload) {
       await sendVideoTutorial(senderId);
       break;
     case 'HAVE_TOKEN':
+      // Set session to track that we're waiting for token input
+      await setUserSession(senderId, { flow: 'waiting_for_token' });
       await sendMessage({
         recipient: { id: senderId },
         message: { text: "Great! Please paste your Canvas Access Token here and I'll validate it." }
@@ -461,6 +490,9 @@ async function handleQuickReply(senderId, payload) {
       break;
     case 'TEST_PLANNER_NOTES':
       await testPlannerNotesVisibility(senderId);
+      break;
+    case 'VIEW_RECENT_TASKS':
+      await viewRecentCreatedTasks(senderId);
       break;
     case 'HOW_TO_USE':
       await sendHowToUse(senderId);
@@ -533,6 +565,8 @@ async function handlePostback(senderId, postback) {
       await sendVideoTutorial(senderId);
       break;
     case 'HAVE_TOKEN':
+      // Set session to track that we're waiting for token input
+      await setUserSession(senderId, { flow: 'waiting_for_token' });
       await sendMessage({
         recipient: { id: senderId },
         message: { text: "Great! Please paste your Canvas Access Token here and I'll validate it." }
@@ -627,7 +661,19 @@ async function sendAndroidFriendlyMenu(senderId) {
 // Welcome message (simplified now that we have persistent menu)
 async function sendWelcomeMessage(senderId) {
   const user = await getUser(senderId);
-  const userName = user?.canvas_user_name ? `, ${user.canvas_user_name.split(' ')[0]}` : '';
+  let userName = '';
+  if (user?.canvas_user_name) {
+    // Parse 'SURNAME, FIRSTNAME MIDDLENAME' format to get FIRSTNAME
+    const nameParts = user.canvas_user_name.split(',');
+    if (nameParts.length >= 2) {
+      // Get first name from 'FIRSTNAME MIDDLENAME' part and trim whitespace
+      const firstNamePart = nameParts[1].trim().split(' ')[0];
+      userName = `, ${firstNamePart}`;
+    } else {
+      // Fallback to first word if format is unexpected
+      userName = `, ${user.canvas_user_name.split(' ')[0]}`;
+    }
+  }
   
   const message = {
     recipient: { id: senderId },
@@ -1557,6 +1603,97 @@ async function testPlannerNotesVisibility(senderId) {
   }
 }
 
+// View recently created tasks from both local database and Canvas
+async function viewRecentCreatedTasks(senderId) {
+  const user = await getUser(senderId);
+  if (!user || !user.canvas_token) {
+    await sendMessage({ 
+      recipient: { id: senderId }, 
+      message: { text: '❌ No Canvas token found. Please set up Canvas first from the menu: Canvas Setup.' } 
+    });
+    return;
+  }
+
+  await sendMessage({ 
+    recipient: { id: senderId }, 
+    message: { text: '📋 Checking your recently created tasks...' } 
+  });
+
+  try {
+    // Get tasks from local database
+    const localTasks = await db.getUserTasks(senderId, { upcoming: true, daysAhead: 30 });
+    const manualTasks = localTasks.filter(task => task.is_manual);
+    
+    // Get planner notes from Canvas
+    const plannerNotes = await fetchRecentPlannerNotes(senderId, { perPage: 10 });
+    
+    // Summary message
+    await sendMessage({ 
+      recipient: { id: senderId }, 
+      message: { 
+        text: `📊 Task Summary:\n\n🗄️ Tasks in local database: ${manualTasks.length}\n📱 Tasks in Canvas Dashboard: ${plannerNotes.length}\n\nHere are your recent tasks:` 
+      } 
+    });
+
+    // Display manual tasks from database
+    if (manualTasks.length > 0) {
+      await sendMessage({ 
+        recipient: { id: senderId }, 
+        message: { text: '🗄️ **Tasks stored locally:**' } 
+      });
+      
+      for (const task of manualTasks.slice(0, 5)) {
+        const whenText = task.due_date ? formatDateTimeManila(new Date(task.due_date)) : 'No due date';
+        const canvasInfo = task.canvas_type ? `(${task.canvas_type} in Canvas)` : '(Local only)';
+        await sendMessage({ 
+          recipient: { id: senderId }, 
+          message: { 
+            text: `• ${task.title}\n  📚 ${task.course_name}\n  ⏰ ${whenText}\n  💾 ${canvasInfo}` 
+          } 
+        });
+        await new Promise(r => setTimeout(r, 300));
+      }
+    }
+
+    // Display Canvas planner notes
+    if (plannerNotes.length > 0) {
+      await sendMessage({ 
+        recipient: { id: senderId }, 
+        message: { text: '\n📱 **Tasks visible in Canvas Dashboard To-Do list:**' } 
+      });
+      
+      for (const note of plannerNotes.slice(0, 5)) {
+        const when = note.todo_date ? new Date(note.todo_date) : null;
+        const whenText = when ? formatDateTimeManila(when) : '(no date)';
+        const courseInfo = note.course_id ? `Course ID: ${note.course_id}` : 'Personal';
+        await sendMessage({ 
+          recipient: { id: senderId }, 
+          message: { 
+            text: `• ${note.title}\n  📚 ${courseInfo}\n  ⏰ ${whenText}` 
+          } 
+        });
+        await new Promise(r => setTimeout(r, 300));
+      }
+    }
+
+    // Help text if tasks are not syncing
+    if (manualTasks.length > 0 && plannerNotes.length === 0) {
+      await sendMessage({ 
+        recipient: { id: senderId }, 
+        message: { 
+          text: `⚠️ Your tasks are stored locally but not showing in Canvas Dashboard.\n\nThis could mean:\n• Your Canvas token doesn't have Planner Notes permission\n• Tasks were created as Calendar Events (check Canvas Calendar)\n• Canvas sync is delayed\n\nTry refreshing your Canvas Dashboard or pulling-to-refresh on mobile.` 
+        } 
+      });
+    }
+  } catch (error) {
+    console.error('Error viewing recent tasks:', error);
+    await sendMessage({ 
+      recipient: { id: senderId }, 
+      message: { text: '❌ Error fetching task information. Please try again later.' } 
+    });
+  }
+}
+
 // Handle Canvas creation failure with detailed error message
 async function sendCanvasCreationFailure(senderId, title, courseLabel, whenText, error) {
   const errorDetails = error.response?.data ? 
@@ -2320,6 +2457,11 @@ async function sendCanvasSetup(senderId) {
           },
           {
             content_type: "text",
+            title: "🔍 Check Recent Tasks",
+            payload: "VIEW_RECENT_TASKS"
+          },
+          {
+            content_type: "text",
             title: "📋 View My Tasks",
             payload: "MY_TASKS"
           }
@@ -2741,10 +2883,14 @@ async function handleTaskTimeQuickReply(senderId, hour, minute) {
 }
 
 
-// Helper function to get Manila timezone date
+// Helper function to check if text looks like a Canvas token
 function isCanvasToken(text) {
-  // Canvas tokens are typically long alphanumeric strings
-  return text.length > 20 && /^[a-zA-Z0-9~]+$/.test(text);
+  // Canvas tokens are typically:
+  // - 64+ characters long
+  // - Start with a number followed by ~ 
+  // - Contains letters, numbers, tildes, and sometimes other special chars
+  // Be more lenient to avoid false negatives
+  return text.length >= 40 && /^[0-9]+~[a-zA-Z0-9~._-]+$/.test(text.trim());
 }
 
 // Send message to Facebook Messenger API
