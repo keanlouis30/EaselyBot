@@ -3023,24 +3023,14 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Function to set up the persistent menu (hamburger menu)
+// Function to set up the persistent menu (hamburger menu) with rate limit handling
 async function setupPersistentMenu() {
-  // First, delete any existing menu to ensure clean setup
-  try {
-    await axios.delete(
-      `https://graph.facebook.com/v18.0/me/messenger_profile?access_token=${PAGE_ACCESS_TOKEN}`,
-      {
-        data: { fields: ["persistent_menu"] },
-        headers: { 'Content-Type': 'application/json' }
-      }
-    );
-    console.log('Cleared existing persistent menu');
-  } catch (error) {
-    console.log('No existing menu to clear or error clearing:', error.message);
-  }
+  // Skip clearing menu to avoid unnecessary API calls that might hit rate limits
+  // The new menu will overwrite the existing one anyway
+  console.log('Setting up persistent menu...');
   
-  // Add small delay to ensure deletion is processed
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  // Add small delay to spread out API calls
+  await new Promise(resolve => setTimeout(resolve, 2000));
   
   const menuData = {
     persistent_menu: [
@@ -3112,17 +3102,20 @@ async function setupPersistentMenu() {
     );
     console.log('Persistent menu configured successfully:', response.data);
     
-    // Verify the menu was set correctly
-    const verifyResponse = await axios.get(
-      `https://graph.facebook.com/v18.0/me/messenger_profile?fields=persistent_menu&access_token=${PAGE_ACCESS_TOKEN}`
-    );
-    console.log('Menu verification:', JSON.stringify(verifyResponse.data, null, 2));
+    // Skip verification to avoid additional API calls
+    console.log('Menu setup completed (verification skipped to avoid rate limits)');
+    
   } catch (error) {
-    console.error('Failed to set persistent menu:', error.response?.data || error.message);
+    if (error.response?.data?.error?.code === 613) {
+      console.warn('Rate limit hit while setting persistent menu. This is normal during frequent deployments.');
+      console.warn('The menu should already be configured from a previous deployment.');
+    } else {
+      console.error('Failed to set persistent menu:', error.response?.data || error.message);
+    }
   }
 }
 
-// Function to set up the Get Started button
+// Function to set up the Get Started button with rate limit handling
 async function setupGetStartedButton() {
   const buttonData = {
     get_started: {
@@ -3142,7 +3135,12 @@ async function setupGetStartedButton() {
     );
     console.log('Get Started button configured successfully');
   } catch (error) {
-    console.error('Failed to set Get Started button:', error.response?.data || error.message);
+    if (error.response?.data?.error?.code === 613) {
+      console.warn('Rate limit hit while setting Get Started button. This is normal during frequent deployments.');
+      console.warn('The button should already be configured from a previous deployment.');
+    } else {
+      console.error('Failed to set Get Started button:', error.response?.data || error.message);
+    }
   }
 }
 
@@ -3162,10 +3160,19 @@ app.listen(PORT, async () => {
   } else {
     console.log('All required environment variables are set');
     
-    // Setup Facebook Messenger persistent menu and Get Started button
-    console.log('Setting up Messenger profile...');
-    await setupGetStartedButton();
-    await setupPersistentMenu();
+    // Only setup Messenger profile if explicitly requested or in production
+    const shouldSetupProfile = process.env.SETUP_MESSENGER_PROFILE === 'true' || 
+                              process.env.NODE_ENV === 'production' ||
+                              process.env.FORCE_MENU_SETUP === 'true';
+    
+    if (shouldSetupProfile) {
+      console.log('Setting up Messenger profile...');
+      await setupGetStartedButton();
+      await setupPersistentMenu();
+    } else {
+      console.log('Skipping Messenger profile setup (set SETUP_MESSENGER_PROFILE=true to force setup)');
+      console.log('Menu should already be configured from previous deployment.');
+    }
   }
   
   if (missingOptional.length > 0) {
